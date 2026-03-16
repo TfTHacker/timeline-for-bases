@@ -1,0 +1,12 @@
+{
+	"id": "timeline-for-bases",
+	"name": "Timeline for Bases",
+	"version": "0.1.0",
+	"minAppVersion": "1.10.0",
+	"description": "Adds a timeline (Gantt-like) layout to Bases.",
+	"author": "TfTHacker",
+	"isDesktopOnly": true,
+	"fundingUrl": {
+		"Visit my site": "https://x.com/tfthacker"
+	} 
+}

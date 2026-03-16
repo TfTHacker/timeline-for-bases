@@ -1,0 +1,847 @@
+.bases-timeline-view {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 12px;
+	color: var(--text-normal);
+	height: 100%;
+	--timeline-label-col-width: 260px;
+	font-family: var(--font-interface);
+	font-size: var(--font-ui-small);
+	letter-spacing: 0;
+	word-spacing: 0;
+}
+
+.bases-timeline-view,
+.bases-timeline-view * {
+	letter-spacing: normal !important;
+	word-spacing: normal !important;
+	font-family: var(--font-interface) !important;
+}
+
+.bases-timeline-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	flex-wrap: wrap;
+}
+
+.bases-timeline-header-left {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	flex-wrap: wrap;
+	flex: 1;
+}
+
+
+.bases-timeline-header-right {
+	display: flex;
+	align-items: center;
+}
+
+/* Scale selector */
+.bases-timeline-scale-selector,
+.bases-timeline-preset-selector,
+.bases-timeline-anchor-selector,
+.bases-timeline-density-selector {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.bases-timeline-scale-label,
+.bases-timeline-preset-label,
+.bases-timeline-density-label {
+	font-size: 0.85rem;
+	font-weight: 500;
+	color: var(--text-muted);
+	min-width: fit-content;
+}
+
+.bases-timeline-scale-buttons,
+.bases-timeline-preset-buttons,
+.bases-timeline-density-buttons {
+	display: flex;
+	gap: 4px;
+	border-radius: 6px;
+	background: var(--background-secondary);
+	padding: 2px;
+}
+
+.bases-timeline-scale-btn,
+.bases-timeline-preset-btn,
+.bases-timeline-density-btn,
+.bases-timeline-anchor-btn {
+	padding: 4px 8px;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: 0.85rem;
+	font-weight: 500;
+	transition: all 0.15s ease;
+}
+
+.bases-timeline-scale-btn:hover,
+.bases-timeline-preset-btn:hover,
+.bases-timeline-density-btn:hover,
+.bases-timeline-anchor-btn:hover {
+	background: var(--background-modifier-border);
+	color: var(--text-normal);
+}
+
+.bases-timeline-scale-btn.is-active,
+.bases-timeline-preset-btn.is-active,
+.bases-timeline-density-btn.is-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.bases-timeline-anchor-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 6px 10px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	color: var(--text-accent);
+}
+
+.bases-timeline-anchor-btn:hover {
+	background: var(--background-secondary-alt);
+}
+
+.bases-timeline-anchor-btn svg {
+	width: 14px;
+	height: 14px;
+	stroke: currentColor;
+	stroke-width: 2.25px;
+}
+
+/* Config controls */
+.bases-timeline-controls {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 10px;
+	background: var(--background-secondary);
+	overflow: visible;
+}
+
+.bases-timeline-controls.is-collapsed {
+	display: none;
+}
+
+.bases-timeline-controls-toggle {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 6px 10px;
+	border-radius: 8px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-accent);
+	cursor: pointer;
+	font-size: 0.85rem;
+	font-weight: 600;
+	transition: all 0.15s ease;
+}
+
+.bases-timeline-controls-toggle svg {
+	width: 16px;
+	height: 16px;
+	stroke: currentColor;
+	stroke-width: 2.25px;
+}
+
+.bases-timeline-controls-toggle-label {
+	line-height: 1;
+}
+
+.bases-timeline-controls-toggle:hover {
+	background: var(--background-secondary-alt);
+	color: var(--text-accent);
+}
+
+.bases-timeline-controls-empty {
+	color: var(--text-muted);
+	font-size: 0.9rem;
+}
+
+.bases-timeline-config-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 6px;
+}
+
+.bases-timeline-config-label {
+	font-size: 0.82rem;
+	color: var(--text-muted);
+	white-space: nowrap;
+	min-width: 70px;
+}
+
+.bases-timeline-config-select {
+	flex: 1;
+	font-size: 0.82rem;
+}
+
+.bases-timeline-config-value {
+	font-size: 0.82rem;
+	color: var(--text-muted);
+	min-width: 28px;
+	text-align: right;
+}
+
+.bases-timeline-color-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.bases-timeline-color-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+	position: relative;
+}
+
+.bases-timeline-color-label {
+	flex: 1;
+	font-size: 0.82rem;
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.bases-timeline-swatch-popup {
+	position: absolute;
+	bottom: calc(100% + 4px);
+	left: 0;
+	z-index: 100;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	padding: 6px;
+	box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px;
+	width: 210px;
+}
+
+.bases-timeline-swatch-popup.is-hidden {
+	display: none;
+}
+
+
+.bases-timeline-swatch {
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	cursor: pointer;
+	border: 2px solid transparent;
+	box-sizing: border-box;
+	flex-shrink: 0;
+	transition: transform 0.1s;
+}
+
+.bases-timeline-swatch:hover {
+	transform: scale(1.25);
+}
+
+.bases-timeline-swatch.is-selected {
+	border-color: var(--text-normal);
+	transform: scale(1.15);
+}
+
+.bases-timeline-swatch.is-current {
+	width: 18px;
+	height: 18px;
+	border: 2px solid var(--background-modifier-border);
+}
+
+
+
+.bases-timeline-body {
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	overflow: hidden;
+	flex: 1;
+}
+
+/* Single-scroller layout with sticky label column */
+.bases-timeline-scroller {
+	flex: 1;
+	overflow-x: auto;
+	overflow-y: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+}
+
+.bases-timeline-canvas {
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	min-width: 100%;
+	position: relative;
+}
+
+/* Continuous vertical separator between Notes column and timeline */
+.bases-timeline-canvas::before {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: var(--timeline-label-col-width);
+	width: 1px;
+	height: 100%;
+	background: var(--background-modifier-border);
+	z-index: 3;
+	pointer-events: none;
+}
+
+/* Timeline axis and grid */
+.bases-timeline-axis {
+	position: sticky;
+	top: 0;
+	z-index: 10;
+	display: flex;
+	flex-direction: row;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	flex-shrink: 0;
+}
+
+/* Sticky Notes label cell in axis */
+.bases-timeline-axis-spacer {
+	position: sticky;
+	left: 0;
+	z-index: 12;
+	width: var(--timeline-label-col-width);
+	min-width: var(--timeline-label-col-width);
+	max-width: var(--timeline-label-col-width);
+	box-sizing: border-box;
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	padding: 0 10px;
+	background: var(--background-primary);
+}
+
+/* Inner timeline axis (context + labels) */
+.bases-timeline-axis-inner {
+	flex: 1;
+	position: relative;
+	overflow: visible;
+}
+
+/* Adaptive height based on scale */
+.bases-timeline-axis[data-scale="day"],
+.bases-timeline-axis[data-scale="week"],
+.bases-timeline-axis[data-scale="month"],
+.bases-timeline-axis[data-scale="quarter"],
+.bases-timeline-axis[data-scale="year"] {
+	height: 48px;
+}
+
+.bases-timeline-notes-header {
+	font-size: 0.82rem;
+	font-weight: 700;
+	color: var(--text-muted);
+	line-height: 1.2;
+	padding: 0;
+}
+
+.bases-timeline-axis-labels {
+	position: relative;
+	height: 100%;
+	display: flex;
+	align-items: flex-end;
+	padding-bottom: 6px;
+}
+
+.bases-timeline-axis-labels.has-context {
+	height: calc(100% - 18px);
+	align-items: center;
+	padding-bottom: 0;
+}
+
+.bases-timeline-axis-labels.is-day-scale {
+	padding-bottom: 0;
+}
+
+.bases-timeline-axis-week-row,
+.bases-timeline-axis-day-row {
+	position: relative;
+	height: 50%;
+	border-bottom: 1px solid var(--background-modifier-border);
+	overflow: hidden;
+	background: var(--background-primary);
+}
+
+.bases-timeline-axis-week-row:last-child {
+	border-bottom: none;
+}
+
+.bases-timeline-axis-week-label,
+.bases-timeline-axis-day-label {
+	position: absolute;
+	transform: translateX(-50%);
+	white-space: nowrap;
+	font-size: 0.72rem;
+	color: var(--text-muted);
+	max-width: 90px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	padding: 1px 3px;
+	z-index: 2;
+}
+
+.bases-timeline-axis-week-label {
+	top: 50%;
+	transform: translate(-50%, -50%);
+	font-weight: 700;
+	color: var(--text-normal);
+	font-size: 0.75rem;
+}
+
+.bases-timeline-axis-label.is-day-label {
+	bottom: 6px;
+	font-size: 0.72rem;
+	font-weight: 500;
+	color: var(--text-muted);
+}
+
+
+.bases-timeline-axis-label {
+	position: absolute;
+	bottom: 6px;
+	font-size: 0.75rem;
+	color: var(--text-muted);
+	white-space: nowrap;
+	font-weight: 500;
+	max-width: 80px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	padding: 0 4px;
+}
+
+.bases-timeline-axis-label.is-week-label {
+	max-width: 120px;
+	font-size: 0.72rem;
+	font-weight: 600;
+	color: var(--text-muted);
+	padding: 0 4px;
+	bottom: auto;
+	top: 50%;
+	transform: translate(-50%, -50%);
+}
+
+/* Contextual header (month/year/decade context) */
+.bases-timeline-context-header {
+	position: relative;
+	height: 18px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	overflow: hidden;
+	flex-shrink: 0;
+}
+
+.bases-timeline-context-segment {
+	position: absolute;
+	top: 0;
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 0.7rem;
+	font-weight: 600;
+	color: var(--text-muted);
+	white-space: nowrap;
+	border-right: none;
+	padding: 0 6px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Divider line on context segments — matches year-boundary grid line style */
+.bases-timeline-context-segment::after {
+	content: '';
+	position: absolute;
+	top: 0;
+	right: 0;
+	width: 2px;
+	height: 100%;
+	background: var(--text-muted);
+	opacity: 0.6;
+}
+
+/* Grid lines */
+.bases-timeline-grid {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	pointer-events: none;
+	z-index: 0;
+}
+
+/* Weekend background (day scale only) - subtle highlight */
+.bases-timeline-weekend-bg {
+	position: absolute;
+	top: 0;
+	height: 100%;
+	background: var(--background-modifier-border);
+	opacity: 0.14;
+	pointer-events: none;
+	z-index: 0;
+}
+
+.bases-timeline-grid-line {
+	position: absolute;
+	top: 0;
+	height: 100%;
+	width: 1px;
+	background: var(--background-modifier-border);
+	opacity: 0.3;
+}
+
+/* Minor grid lines (subtle, faint) */
+.bases-timeline-grid-line.is-minor {
+	width: 1px;
+	opacity: 0.1;
+	background: var(--background-modifier-border);
+}
+
+/* Major grid lines (primary scale divisions) */
+.bases-timeline-grid-line.is-major {
+	width: 1px;
+	opacity: 0.5;
+	background: var(--background-modifier-border);
+}
+
+.bases-timeline-grid-line.is-week-boundary {
+	width: 2px;
+	opacity: 0.5;
+	background: var(--text-muted);
+}
+
+.bases-timeline-grid-line.is-month-boundary {
+	width: 1px;
+	opacity: 0.5;
+	background: var(--background-modifier-border);
+}
+
+/* Year boundaries — clearly visible but not overpowering */
+.bases-timeline-grid-line.is-year-boundary {
+	width: 2px;
+	opacity: 0.6;
+	background: var(--text-muted);
+}
+
+/* Week boundary overlay */
+.bases-timeline-week-boundary-overlay {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	pointer-events: none;
+	z-index: 3;
+}
+
+.bases-timeline-week-boundary-line {
+	position: absolute;
+	top: 0;
+	height: 100%;
+	width: 2px;
+	background: var(--text-normal);
+	opacity: 0.55;
+}
+
+.bases-timeline-week-grid-overlay {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	pointer-events: none;
+	z-index: 2;
+}
+
+.bases-timeline-week-grid-line {
+	position: absolute;
+	top: 0;
+	height: 100%;
+	width: 2px;
+	background: var(--background-modifier-border-focus);
+	opacity: 0.4;
+}
+
+/* Today label at top of timeline */
+.bases-timeline-today-label {
+	position: absolute;
+	top: -20px;
+	font-size: 0.7rem;
+	font-weight: 700;
+	color: var(--color-red);
+	white-space: nowrap;
+	transform: translateX(-50%);
+	pointer-events: none;
+	z-index: 6;
+	background: var(--background-primary);
+	padding: 2px 4px;
+	border-radius: 3px;
+}
+
+/* Today marker line - enhanced visual distinction */
+.bases-timeline-today-marker {
+	position: absolute;
+	top: 0;
+	height: 100%;
+	width: 3px;
+	background: var(--color-red);
+	box-shadow: 0 0 12px rgba(255, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+	z-index: 3;
+	pointer-events: none;
+	opacity: 0.85;
+}
+
+/* Today overlay track */
+.bases-timeline-overlay-track {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	pointer-events: none;
+	z-index: 5;
+}
+
+/* Group headers */
+.bases-timeline-group {
+	font-weight: 600;
+	color: var(--text-normal);
+	margin-top: 12px;
+	margin-bottom: 4px;
+	padding-left: 12px;
+	padding-right: 12px;
+	font-size: 0.95rem;
+	border-bottom: 1px solid var(--background-modifier-border);
+	padding-bottom: 6px;
+}
+
+
+.bases-timeline-row {
+	display: flex;
+	align-items: stretch;
+	padding: 0;
+	min-height: 26px;
+	position: relative;
+	border-bottom: 1px solid var(--background-modifier-border-hover);
+	transition: background 0.1s ease;
+}
+
+/* Sticky label cell */
+.bases-timeline-label {
+	position: sticky;
+	left: 0;
+	z-index: 4;
+	width: var(--timeline-label-col-width);
+	min-width: var(--timeline-label-col-width);
+	max-width: var(--timeline-label-col-width);
+	box-sizing: border-box;
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	padding: 4px 10px;
+	font-size: 0.82rem;
+	font-weight: 400;
+	font-family: var(--font-interface);
+	letter-spacing: normal;
+	white-space: nowrap;
+	overflow: hidden;
+	background: var(--background-primary);
+	cursor: pointer;
+	color: var(--text-normal);
+}
+
+.bases-timeline-label span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+	flex: 1;
+}
+
+/* Resize handle on right edge of label column */
+.bases-timeline-resize-handle {
+	position: absolute;
+	right: -4px;
+	top: 0;
+	width: 8px;
+	height: 100%;
+	cursor: col-resize;
+	z-index: 20;
+	background: transparent;
+}
+
+.bases-timeline-resize-handle:hover {
+	background: var(--interactive-accent);
+	opacity: 0.4;
+}
+
+body.bases-timeline-resizing {
+	cursor: col-resize !important;
+	user-select: none !important;
+}
+
+body.bases-timeline-resizing * {
+	cursor: col-resize !important;
+}
+
+.bases-timeline-row.is-even .bases-timeline-label {
+	background: var(--background-secondary);
+}
+
+/* Keep label always opaque — hover color may be semi-transparent causing bleed */
+.bases-timeline-row:hover .bases-timeline-label,
+.bases-timeline-row.is-active-hover .bases-timeline-label {
+	background: var(--background-primary);
+}
+
+.bases-timeline-row.is-even:hover .bases-timeline-label,
+.bases-timeline-row.is-even.is-active-hover .bases-timeline-label {
+	background: var(--background-secondary);
+}
+
+.bases-timeline-label.is-missing {
+	color: var(--text-faint);
+}
+
+.bases-timeline-label:hover {
+	color: var(--text-accent);
+	text-decoration: underline;
+}
+
+.bases-timeline-view[data-density="compact"] .bases-timeline-row {
+	min-height: 26px;
+}
+
+.bases-timeline-row.is-even {
+	background: var(--background-secondary);
+}
+
+/* Industry pattern: full-row highlight on hover (like monday.com) */
+.bases-timeline-row:hover,
+.bases-timeline-row.is-active-hover {
+	background: var(--background-modifier-hover);
+	box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+}
+
+.bases-timeline-row.is-even:hover,
+.bases-timeline-row.is-even.is-active-hover {
+	background: var(--background-modifier-hover);
+}
+
+.bases-timeline-view[data-density="compact"] .bases-timeline-bar {
+	height: 14px;
+}
+
+/* Track and bar */
+.bases-timeline-track {
+	position: relative;
+	flex: 1;
+	display: flex;
+	align-items: center;
+	background: transparent;
+	overflow: hidden;
+	min-width: 0;
+}
+
+.bases-timeline-row.is-missing .bases-timeline-track {
+	opacity: 0.2;
+}
+
+.bases-timeline-bar {
+	position: absolute;
+	height: 18px;
+	border-radius: 4px;
+	background: var(--interactive-accent);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15), inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+	cursor: pointer;
+	transition: all 0.15s ease;
+	border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.bases-timeline-bar.is-point {
+	min-width: 8px;
+}
+
+.bases-timeline-bar.is-compressed {
+	min-width: 6px;
+	opacity: 0.9;
+}
+
+/* Enhanced bar hover state - more prominent lift and glow */
+.bases-timeline-bar:hover {
+	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25), inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+	transform: translateY(-3px);
+	height: 24px;
+	top: -3px;
+	border: 2px solid rgba(255, 255, 255, 0.3);
+}
+
+/* Bar hover state when parent row is highlighted */
+.bases-timeline-row.is-active-hover .bases-timeline-bar {
+	filter: brightness(1.1);
+}
+
+/* Empty state */
+.bases-timeline-empty {
+	color: var(--text-muted);
+	padding: 24px 12px;
+	text-align: center;
+	font-size: 0.95rem;
+}
+
+
+
+@media (max-width: 768px) {
+	.bases-timeline-header {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.bases-timeline-header-left {
+		flex-direction: column;
+		gap: 12px;
+		width: 100%;
+	}
+
+	.bases-timeline-scale-selector,
+	.bases-timeline-preset-selector {
+		width: 100%;
+	}
+
+	.bases-timeline-scale-buttons,
+	.bases-timeline-preset-buttons {
+		flex: 1;
+	}
+
+	.bases-timeline-view {
+		--timeline-label-col-width: 180px;
+	}
+}
