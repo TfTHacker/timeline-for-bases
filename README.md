@@ -76,6 +76,7 @@ Notes:
 
 - The Git tag must match the plugin version in `manifest.json` exactly, using Obsidian's required `x.y.z` format.
 - Do not use a `v` prefix. Use `0.1.2`, not `v0.1.2`.
+- `npm version ...` creates a `vX.Y.Z` tag by default. After running it, replace that tag locally with `X.Y.Z` before pushing.
 - `npm version ...` updates `package.json`, `package-lock.json`, and creates the tag.
 - The project's `version` script also updates `manifest.json` and `versions.json` automatically.
 - The release workflow lives in `.github/workflows/release.yml`.
