@@ -51,3 +51,19 @@ Set in the **Config panel** (gear icon in the timeline header):
 Plugin-wide setting (Settings → Timeline for Bases):
 - **Week starts on** — Monday or Sunday
 
+## Releasing
+
+This plugin publishes Obsidian-compatible release assets from a Git tag.
+
+1. Bump the version:
+   `npm version patch`
+   or `npm version minor`
+   or `npm version major`
+2. Push the commit and tag:
+   `git push && git push --tags`
+3. GitHub Actions will build the plugin and create a GitHub Release containing:
+   - `manifest.json`
+   - `main.js`
+   - `styles.css`
+
+The pushed tag must match the plugin version in `manifest.json`. Tags created by `npm version` like `v0.1.1` are supported.
