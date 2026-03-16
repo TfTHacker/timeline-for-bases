@@ -42,7 +42,6 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 Set in the Bases **Configure View** panel:
 - **Start date** — frontmatter property for the bar start
 - **End date** — frontmatter property for the bar end
-- **Time scale** — Day / Week / Month / Quarter / Year
 
 Set in the **Config panel** (gear icon in the timeline header):
 - **Label** — which property to display on bars
