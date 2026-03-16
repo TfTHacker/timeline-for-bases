@@ -55,15 +55,27 @@ Plugin-wide setting (Settings → Timeline for Bases):
 
 This plugin publishes Obsidian-compatible release assets from a Git tag.
 
-1. Bump the version:
+Use this exact flow for a new release:
+
+1. Make sure the working tree is clean:
+   `git status`
+2. Bump the version:
    `npm version patch`
    or `npm version minor`
    or `npm version major`
-2. Push the commit and tag:
-   `git push && git push --tags`
-3. GitHub Actions will build the plugin and create a GitHub Release containing:
+3. Push the release commit:
+   `git push origin main`
+4. Push the tag created by `npm version`:
+   `git push origin --tags`
+5. GitHub Actions will build the plugin and create a GitHub Release containing:
    - `manifest.json`
    - `main.js`
    - `styles.css`
 
-The pushed tag must match the plugin version in `manifest.json` exactly, using the `x.y.z` format required by Obsidian. For example: `0.1.2`, not `v0.1.2`.
+Notes:
+
+- The Git tag must match the plugin version in `manifest.json` exactly, using Obsidian's required `x.y.z` format.
+- Do not use a `v` prefix. Use `0.1.2`, not `v0.1.2`.
+- `npm version ...` updates `package.json`, `package-lock.json`, and creates the tag.
+- The project's `version` script also updates `manifest.json` and `versions.json` automatically.
+- The release workflow lives in `.github/workflows/release.yml`.
