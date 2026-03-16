@@ -66,4 +66,4 @@ This plugin publishes Obsidian-compatible release assets from a Git tag.
    - `main.js`
    - `styles.css`
 
-The pushed tag must match the plugin version in `manifest.json`. Tags created by `npm version` like `v0.1.1` are supported.
+The pushed tag must match the plugin version in `manifest.json` exactly, using the `x.y.z` format required by Obsidian. For example: `0.1.2`, not `v0.1.2`.

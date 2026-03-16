@@ -3,7 +3,6 @@ name: Release Obsidian Plugin
 on:
   push:
     tags:
-      - "v*.*.*"
       - "*.*.*"
 
 permissions:
@@ -33,7 +32,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
           MANIFEST_VERSION="$(node -p "require('./manifest.json').version")"
 
           if [ "$TAG" != "$MANIFEST_VERSION" ]; then
