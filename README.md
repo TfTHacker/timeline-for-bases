@@ -51,6 +51,20 @@ Set in the **Config panel** (gear icon in the timeline header):
 Plugin-wide setting (Settings → Timeline for Bases):
 - **Week starts on** — Monday or Sunday
 
+## Install
+
+For testing before the plugin is in the official Obsidian community plugin list, install it with the BRAT plugin:
+
+1. In Obsidian, install and enable **BRAT** ("Beta Reviewers Auto-update Tester").
+2. Open **Settings -> BRAT**.
+3. Choose **Add Beta plugin**.
+4. Paste this repository URL:
+   `https://github.com/TfTHacker/timeline-for-bases`
+5. Confirm the install and let BRAT download the latest release.
+6. Enable **Timeline for Bases** in **Settings -> Community plugins**.
+
+BRAT installs from this repository's GitHub releases, so the tagged release assets must exist for installation to work.
+
 ## Releasing
 
 This plugin publishes Obsidian-compatible release assets from a Git tag.
