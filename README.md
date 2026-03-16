@@ -2,6 +2,8 @@
 
 A Gantt-style timeline view for [Obsidian Bases](https://obsidian.md/bases).
 
+![Timeline for Bases screenshot](./screenshot.jpg)
+
 ---
 
 ## The Story
@@ -21,8 +23,6 @@ It's what vibe coding looks like when the goal is something real.
 ## What It Does
 
 Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point your base at any folder of notes with date frontmatter and you get a horizontal timeline — by day, week, month, quarter, or year.
-
-![Timeline for Bases screenshot](./screenshot.jpg)
 
 ### Features
 
