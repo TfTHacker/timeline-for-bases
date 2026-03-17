@@ -871,10 +871,9 @@ export class TimelineView extends BasesView {
 		}
 	}
 
-	private getCompactWeekdayLabel(date: Date, weekStart: 'monday' | 'sunday'): string {
-		const mondayLabels = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
-		const sundayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
-		const labels = weekStart === 'sunday' ? sundayLabels : mondayLabels;
+	private getCompactWeekdayLabel(date: Date, _weekStart: 'monday' | 'sunday'): string {
+		// getDay(): 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+		const labels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 		return labels[date.getDay()] ?? new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(date).slice(0, 2);
 	}
 
