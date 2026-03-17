@@ -376,14 +376,28 @@ export class TimelineView extends BasesView {
 			return;
 		}
 
-		let min = this.snapStartToScale(minDate, config.timeScale, config.weekStart);
-		let max = this.snapEndToScale(maxDate, config.timeScale, config.weekStart);
-		const weekMs = 7 * 24 * 60 * 60 * 1000;
-		if (config.timeScale === 'week') {
-			min = new Date(min.getTime() - weekMs);
-			max = new Date(max.getTime() + weekMs);
-		} else if (config.timeScale !== 'day') {
-			max = new Date(max.getTime() + weekMs);
+		// Use saved range window from config if available (rangeStartDate + rangePresetDays).
+		// This keeps the time scale fixed regardless of dataset size.
+		// Fall back to data-derived range only when no window is saved.
+		const rangeStartMs = this.config.get('rangeStartDate');
+		const rangePresetDays = this.config.get('rangePresetDays');
+		let min: Date;
+		let max: Date;
+		if (typeof rangeStartMs === 'number' && rangeStartMs > 0 && typeof rangePresetDays === 'number' && rangePresetDays > 0) {
+			min = new Date(rangeStartMs);
+			min.setHours(0, 0, 0, 0);
+			max = new Date(min.getTime() + rangePresetDays * 24 * 60 * 60 * 1000);
+			max.setHours(23, 59, 59, 999);
+		} else {
+			min = this.snapStartToScale(minDate, config.timeScale, config.weekStart);
+			max = this.snapEndToScale(maxDate, config.timeScale, config.weekStart);
+			const weekMs = 7 * 24 * 60 * 60 * 1000;
+			if (config.timeScale === 'week') {
+				min = new Date(min.getTime() - weekMs);
+				max = new Date(max.getTime() + weekMs);
+			} else if (config.timeScale !== 'day') {
+				max = new Date(max.getTime() + weekMs);
+			}
 		}
 
 		// Single scroller — sticky label column, no split pane, no JS scroll sync needed
