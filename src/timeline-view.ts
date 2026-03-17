@@ -383,7 +383,6 @@ export class TimelineView extends BasesView {
 		const rangePresetDays = this.config.get('rangePresetDays');
 		let min: Date;
 		let max: Date;
-		console.log('[Timeline] rangeStartMs:', rangeStartMs, 'rangePresetDays:', rangePresetDays, 'rangeStartDate:', rangeStartMs && typeof rangeStartMs === 'number' ? new Date(rangeStartMs).toISOString() : 'none');
 		if (typeof rangeStartMs === 'number' && rangeStartMs > 0 && typeof rangePresetDays === 'number' && rangePresetDays > 0) {
 			min = new Date(rangeStartMs);
 			min.setHours(0, 0, 0, 0);
@@ -991,8 +990,13 @@ export class TimelineView extends BasesView {
 			containerEl.createDiv({ cls: 'bases-timeline-group', text: groupLabel });
 		}
 
-		group.entries.forEach((entry, index) => {
-			this.renderRow(containerEl, entry, config, min, max, index % 2 === 0, ticks, entryDatesCache);
+		let rowIndex = 0;
+		group.entries.forEach((entry) => {
+			const dates = entryDatesCache.get(entry) ?? null;
+			// Skip entries entirely outside the render window (no overlap with [min, max])
+			if (dates && (dates.end < min || dates.start > max)) return;
+			this.renderRow(containerEl, entry, config, min, max, rowIndex % 2 === 0, ticks, entryDatesCache);
+			rowIndex++;
 		});
 	}
 
