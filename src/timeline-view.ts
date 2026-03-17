@@ -380,31 +380,49 @@ export class TimelineView extends BasesView {
 		}
 
 		// --- Step 2: Build entry dates cache ---
-		// With a fixed window: use cheap metadata cache for pre-filtering.
-		// Only call entry.getValue() for entries that might fall within the window.
+		// With a fixed window: use cheap metadata cache for pre-filtering AND date reading.
+		// Only fall back to expensive entry.getValue() if the cache is incomplete.
 		// Without a fixed window: call getEntryDates() for all entries to compute auto-fit range.
 		const entryDatesCache = new Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>();
 		const startPropName = config.startDateProp && String(config.startDateProp).startsWith('note.')
 			? this.getPropertyName(config.startDateProp)
 			: null;
+		const endPropName = config.endDateProp && String(config.endDateProp).startsWith('note.')
+			? this.getPropertyName(config.endDateProp)
+			: null;
 
 		for (const entry of entries) {
 			if (hasFixedWindow && startPropName) {
-				// Fast pre-filter: if metadata cache says start > window end, skip entirely
-				const cache = this.app.metadataCache.getFileCache(entry.file);
-				const cachedStartRaw = cache?.frontmatter?.[startPropName];
-				if (cachedStartRaw != null) {
-					const rawVal = cachedStartRaw instanceof Date ? cachedStartRaw.getTime()
-					: typeof cachedStartRaw === 'number' ? cachedStartRaw
-					: typeof cachedStartRaw === 'string' ? Date.parse(cachedStartRaw)
-					: NaN;
-				const quickStart = Number.isNaN(rawVal) ? null : new Date(rawVal);
-					if (quickStart && quickStart > max) {
+				const fmCache = this.app.metadataCache.getFileCache(entry.file)?.frontmatter;
+				if (fmCache) {
+					// Parse start from frontmatter cache
+					const startRaw = fmCache[startPropName];
+					const start = this.parseRawFrontmatterDate(startRaw);
+
+					// Skip entries whose start is clearly after window end
+					if (start && start > max) {
 						entryDatesCache.set(entry, null);
-						continue; // skip expensive entry.getValue()
+						continue;
+					}
+
+					// If start is present, try reading end from cache too
+					if (start) {
+						const endRaw = endPropName ? fmCache[endPropName] : undefined;
+						const hasEnd = endRaw != null && endRaw !== '' && endRaw !== false;
+						const end = hasEnd ? this.parseRawFrontmatterDate(endRaw) : null;
+
+						if (!hasEnd || end) {
+							const effectiveEnd = end ?? new Date(start.getTime());
+							if (start.getTime() <= effectiveEnd.getTime()) {
+								// Full dates resolved from cache — skip entry.getValue() entirely
+								entryDatesCache.set(entry, { start, end: effectiveEnd, isPoint: !hasEnd });
+								continue;
+							}
+						}
 					}
 				}
 			}
+			// Fall back to authoritative Bases API
 			entryDatesCache.set(entry, this.getEntryDates(entry, config.startDateProp!, config.endDateProp!));
 		}
 
@@ -1122,6 +1140,16 @@ export class TimelineView extends BasesView {
 		if (start.getTime() > end.getTime()) return null;
 
 		return { start, end, isPoint };
+	}
+
+	/** Parse a raw frontmatter value (string | number | Date) into a Date, or null if invalid. */
+	private parseRawFrontmatterDate(raw: unknown): Date | null {
+		if (raw == null || raw === '' || raw === false) return null;
+		const ms = raw instanceof Date ? raw.getTime()
+			: typeof raw === 'number' ? raw
+			: typeof raw === 'string' ? Date.parse(raw)
+			: NaN;
+		return Number.isNaN(ms) ? null : new Date(ms);
 	}
 
 	private parseDateValue(value: Value | null): Date | null {
