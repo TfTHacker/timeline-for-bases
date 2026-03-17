@@ -1180,9 +1180,15 @@ export class TimelineView extends BasesView {
 		}
 
 		const total = max.getTime() - min.getTime();
-		const startOffset = dates.start.getTime() - min.getTime();
+		// Snap start/end to local midnight so bar edges align with day-scale tick positions.
+		// Date.parse("YYYY-MM-DD") gives UTC midnight; ticks use setHours(0,0,0,0) = local midnight.
+		// Without snapping, the bar is offset by UTC offset (e.g. +1h in UTC+1), bleeding into the next column.
+		const snapToLocalDay = (d: Date): Date => { const r = new Date(d); r.setHours(0, 0, 0, 0); return r; };
+		const localStart = snapToLocalDay(dates.start);
+		const localEnd = snapToLocalDay(dates.end);
 		const oneDayMs = 1000 * 60 * 60 * 24;
-		const duration = Math.max(0, dates.end.getTime() - dates.start.getTime());
+		const startOffset = localStart.getTime() - min.getTime();
+		const duration = Math.max(0, localEnd.getTime() - localStart.getTime());
 		const effectiveDuration = dates.isPoint ? 0 : duration + oneDayMs;
 
 		const left = total === 0 ? 0 : (startOffset / total) * 100;
