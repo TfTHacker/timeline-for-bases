@@ -1285,6 +1285,8 @@ export class TimelineView extends BasesView {
 				labelEl.replaceChild(labelSpan, labelSpan); // ensure span is there
 				labelSpan.replaceWith(input);
 				input.focus(); input.select();
+				input.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
+				input.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
 
 				const save = async () => {
 					const newVal = input.value.trim();
