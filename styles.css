@@ -812,6 +812,45 @@ body.bases-timeline-resizing * {
 	min-width: 8px;
 }
 
+/* Resize handles at left/right edges of each bar */
+.bases-timeline-bar-handle {
+	position: absolute;
+	top: 0;
+	height: 100%;
+	width: 7px;
+	cursor: ew-resize;
+	z-index: 2;
+	border-radius: 3px;
+	opacity: 0;
+	background: rgba(255, 255, 255, 0.5);
+	transition: opacity 0.1s ease;
+}
+.bases-timeline-bar-handle.is-start { left: 0; border-radius: 4px 0 0 4px; }
+.bases-timeline-bar-handle.is-end   { right: 0; border-radius: 0 4px 4px 0; }
+.bases-timeline-bar:hover .bases-timeline-bar-handle { opacity: 1; }
+
+/* Active drag state */
+.bases-timeline-bar.is-dragging {
+	opacity: 0.8;
+	z-index: 10;
+	cursor: grabbing;
+}
+
+/* Floating tooltip shown during drag/resize */
+.bases-timeline-drag-tooltip {
+	position: fixed;
+	z-index: 1000;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	padding: 4px 10px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-normal);
+	pointer-events: none;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+	white-space: nowrap;
+}
+
 .bases-timeline-bar.is-compressed {
 	min-width: 6px;
 	opacity: 0.9;

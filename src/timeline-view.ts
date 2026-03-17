@@ -49,6 +49,20 @@ const PALETTE: string[] = [
 
 const DEFAULT_COLORS = PALETTE;
 
+interface DragState {
+	type: 'move' | 'resize-start' | 'resize-end';
+	barEl: HTMLElement;
+	entryPath: string;
+	startPropKey: string;
+	endPropKey: string;
+	origStart: Date;        // local midnight
+	origEnd: Date;          // local midnight (inclusive)
+	mouseStartX: number;
+	trackWidth: number;     // px width of track element (for px→% conversion)
+	rangeMin: Date;         // local midnight (= timeline min)
+	totalMs: number;        // max - min in ms
+}
+
 export class TimelineView extends BasesView {
 	type = 'timeline';
 	containerEl: HTMLElement;
@@ -57,6 +71,11 @@ export class TimelineView extends BasesView {
 	controlsEl: HTMLElement;
 	plugin: TimelinePlugin;
 	private _renderSeq = 0; // incremented on each render; async renders check this to self-cancel
+
+	private _dragState: DragState | null = null;
+	private _dragTooltipEl: HTMLElement | null = null;
+	private _boundMouseMove!: (e: MouseEvent) => void;
+	private _boundMouseUp!: (e: MouseEvent) => void;
 
 	private onResizeDebounce = debounce(() => this.render(), 100, true);
 	private onDataDebounce = debounce(() => this.render(), 300, false);
@@ -71,10 +90,17 @@ export class TimelineView extends BasesView {
 	}
 
 	onload(): void {
+		this._boundMouseMove = this._onDragMove.bind(this);
+		this._boundMouseUp = this._onDragEnd.bind(this);
+		document.addEventListener('mousemove', this._boundMouseMove);
+		document.addEventListener('mouseup', this._boundMouseUp);
 		this.render();
 	}
 
 	onunload(): void {
+		document.removeEventListener('mousemove', this._boundMouseMove);
+		document.removeEventListener('mouseup', this._boundMouseUp);
+		this._dragTooltipEl?.remove();
 		this.containerEl.empty();
 	}
 
@@ -1216,7 +1242,170 @@ export class TimelineView extends BasesView {
 		}
 
 		barEl.setAttribute('title', `${label} (${dates.start.toLocaleDateString()} → ${dates.end.toLocaleDateString()})`);
+
+		// Drag & resize — only when we know which frontmatter keys to write
+		const startPropKey = config.startDateProp ? String(config.startDateProp).replace(/^note\./, '') : null;
+		const endPropKey   = config.endDateProp   ? String(config.endDateProp).replace(/^note\./, '')   : null;
+
+		if (startPropKey && endPropKey && !dates.isPoint) {
+			// Resize handle — left edge
+			const handleL = barEl.createDiv({ cls: 'bases-timeline-bar-handle is-start' });
+			handleL.addEventListener('mousedown', e => {
+				e.stopPropagation(); e.preventDefault();
+				this._startDrag('resize-start', barEl, entry.file.path, startPropKey, endPropKey,
+					dates!.start, dates!.end, e.clientX, min, total);
+			});
+
+			// Resize handle — right edge
+			const handleR = barEl.createDiv({ cls: 'bases-timeline-bar-handle is-end' });
+			handleR.addEventListener('mousedown', e => {
+				e.stopPropagation(); e.preventDefault();
+				this._startDrag('resize-end', barEl, entry.file.path, startPropKey, endPropKey,
+					dates!.start, dates!.end, e.clientX, min, total);
+			});
+
+			// Bar body — drag to move
+			barEl.addEventListener('mousedown', e => {
+				if ((e.target as HTMLElement).classList.contains('bases-timeline-bar-handle')) return;
+				e.preventDefault();
+				this._startDrag('move', barEl, entry.file.path, startPropKey, endPropKey,
+					dates!.start, dates!.end, e.clientX, min, total);
+			});
+		}
 	}
+
+	// ─── Drag & resize ───────────────────────────────────────────────────────
+
+	private _localMidnight(d: Date): Date { const r = new Date(d); r.setHours(0, 0, 0, 0); return r; }
+
+	private _fmtDate(d: Date): string {
+		const y = d.getFullYear();
+		const m = String(d.getMonth() + 1).padStart(2, '0');
+		const day = String(d.getDate()).padStart(2, '0');
+		return `${y}-${m}-${day}`;
+	}
+
+	private _startDrag(
+		type: DragState['type'],
+		barEl: HTMLElement,
+		entryPath: string,
+		startPropKey: string,
+		endPropKey: string,
+		origStart: Date,
+		origEnd: Date,
+		mouseX: number,
+		rangeMin: Date,
+		totalMs: number
+	): void {
+		const trackEl = barEl.parentElement!;
+		this._dragState = {
+			type, barEl, entryPath, startPropKey, endPropKey,
+			origStart: this._localMidnight(origStart),
+			origEnd:   this._localMidnight(origEnd),
+			mouseStartX: mouseX,
+			trackWidth: trackEl.offsetWidth || 1,
+			rangeMin, totalMs,
+		};
+		barEl.addClass('is-dragging');
+		document.body.style.cursor = type === 'move' ? 'grabbing' : 'ew-resize';
+		(document.body.style as CSSStyleDeclaration & { userSelect: string }).userSelect = 'none';
+
+		this._dragTooltipEl = document.body.createDiv({ cls: 'bases-timeline-drag-tooltip' });
+		this._refreshTooltip(this._dragState.origStart, this._dragState.origEnd);
+	}
+
+	private _refreshTooltip(start: Date, end: Date): void {
+		if (!this._dragTooltipEl) return;
+		const fmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+		this._dragTooltipEl.textContent = `${fmt.format(start)} → ${fmt.format(end)}`;
+	}
+
+	private _onDragMove(e: MouseEvent): void {
+		if (!this._dragState) return;
+		const s = this._dragState;
+
+		const deltaPx = e.clientX - s.mouseStartX;
+		const deltaDays = Math.round((deltaPx / s.trackWidth) * (s.totalMs / 86400000));
+		const dayMs = 86400000;
+
+		let newStart: Date, newEnd: Date;
+
+		if (s.type === 'move') {
+			newStart = this._localMidnight(new Date(s.origStart.getTime() + deltaDays * dayMs));
+			newEnd   = this._localMidnight(new Date(s.origEnd.getTime()   + deltaDays * dayMs));
+			// bar left% based on newStart
+			const newLeftMs  = newStart.getTime() - s.rangeMin.getTime();
+			s.barEl.style.left = `${(newLeftMs / s.totalMs) * 100}%`;
+
+		} else if (s.type === 'resize-end') {
+			newStart = new Date(s.origStart);
+			const rawEnd = this._localMidnight(new Date(s.origEnd.getTime() + deltaDays * dayMs));
+			// end must be >= start
+			newEnd = rawEnd < s.origStart ? new Date(s.origStart) : rawEnd;
+			const excl = new Date(newEnd); excl.setDate(excl.getDate() + 1);
+			const widthMs = excl.getTime() - newStart.getTime();
+			s.barEl.style.width = `${Math.max(0, (widthMs / s.totalMs) * 100)}%`;
+
+		} else { // resize-start
+			const rawStart = this._localMidnight(new Date(s.origStart.getTime() + deltaDays * dayMs));
+			// start must be <= end
+			newStart = rawStart > s.origEnd ? new Date(s.origEnd) : rawStart;
+			newEnd = new Date(s.origEnd);
+			const newLeftMs = newStart.getTime() - s.rangeMin.getTime();
+			const excl = new Date(newEnd); excl.setDate(excl.getDate() + 1);
+			const widthMs = excl.getTime() - newStart.getTime();
+			s.barEl.style.left  = `${(newLeftMs / s.totalMs) * 100}%`;
+			s.barEl.style.width = `${Math.max(0, (widthMs / s.totalMs) * 100)}%`;
+		}
+
+		this._refreshTooltip(newStart, newEnd);
+		if (this._dragTooltipEl) {
+			this._dragTooltipEl.style.left = `${e.clientX + 14}px`;
+			this._dragTooltipEl.style.top  = `${e.clientY - 32}px`;
+		}
+	}
+
+	private async _onDragEnd(_e: MouseEvent): Promise<void> {
+		if (!this._dragState) return;
+		const s = this._dragState;
+		this._dragState = null;
+
+		s.barEl.removeClass('is-dragging');
+		document.body.style.cursor = '';
+		(document.body.style as CSSStyleDeclaration & { userSelect: string }).userSelect = '';
+		this._dragTooltipEl?.remove();
+		this._dragTooltipEl = null;
+
+		// Compute final dates from bar's current style
+		const leftPct  = parseFloat(s.barEl.style.left)  || 0;
+		const widthPct = parseFloat(s.barEl.style.width) || 0;
+
+		const newStartMs = s.rangeMin.getTime() + (leftPct / 100) * s.totalMs;
+		const newStart = new Date(newStartMs); newStart.setHours(0, 0, 0, 0);
+
+		let newEnd: Date;
+		if (s.type === 'move') {
+			const origDurMs = s.origEnd.getTime() - s.origStart.getTime();
+			newEnd = new Date(newStart.getTime() + origDurMs); newEnd.setHours(0, 0, 0, 0);
+		} else {
+			// bar width includes the +1 day exclusive end; subtract to get inclusive end
+			const endExclMs = s.rangeMin.getTime() + ((leftPct + widthPct) / 100) * s.totalMs;
+			newEnd = new Date(endExclMs - 86400000); newEnd.setHours(0, 0, 0, 0);
+		}
+
+		const file = this.app.vault.getFileByPath(s.entryPath);
+		if (!file) return;
+		try {
+			await this.app.fileManager.processFrontMatter(file, fm => {
+				fm[s.startPropKey] = this._fmtDate(newStart);
+				fm[s.endPropKey]   = this._fmtDate(newEnd);
+			});
+		} catch (err) {
+			console.error('[Timeline] Failed to update frontmatter:', err);
+		}
+	}
+
+	// ─── End drag & resize ───────────────────────────────────────────────────
 
 	private getEntryLabel(entry: BasesEntry, labelProp: BasesPropertyId | null): string {
 		if (labelProp) {
