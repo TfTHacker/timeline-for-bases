@@ -56,6 +56,7 @@ export class TimelineView extends BasesView {
 	bodyEl: HTMLElement;
 	controlsEl: HTMLElement;
 	plugin: TimelinePlugin;
+	private _renderSeq = 0; // incremented on each render; async renders check this to self-cancel
 
 	private onResizeDebounce = debounce(() => this.render(), 100, true);
 
@@ -352,7 +353,6 @@ export class TimelineView extends BasesView {
 
 	private renderTimeline(config: TimelineConfig): void {
 		const groups = this.data.groupedData || [];
-		const entries = groups.flatMap(group => group.entries);
 
 		if (!config.startDateProp || !config.endDateProp) {
 			this.bodyEl.createDiv({ cls: 'bases-timeline-empty', text: 'Select start and end date fields in view options.' });
@@ -360,77 +360,93 @@ export class TimelineView extends BasesView {
 		}
 
 		// --- Step 1: Determine render window ---
-		// Do this FIRST so we can skip expensive entry.getValue() calls for out-of-range entries.
 		const rangeStartMs = this.config.get('rangeStartDate');
 		const rangePresetDays = this.config.get('rangePresetDays');
-		let min: Date;
-		let max: Date;
-		let hasFixedWindow = false;
+		const hasFixedWindow = typeof rangeStartMs === 'number' && rangeStartMs > 0
+			&& typeof rangePresetDays === 'number' && rangePresetDays > 0;
 
-		if (typeof rangeStartMs === 'number' && rangeStartMs > 0 && typeof rangePresetDays === 'number' && rangePresetDays > 0) {
-			min = new Date(rangeStartMs);
+		if (hasFixedWindow) {
+			// Fixed window: canvas can be set up immediately (min/max known from config).
+			// All entry processing + row rendering is deferred async to keep the UI responsive.
+			const min = new Date(rangeStartMs as number);
 			min.setHours(0, 0, 0, 0);
-			max = new Date(min.getTime() + rangePresetDays * 24 * 60 * 60 * 1000);
+			const max = new Date(min.getTime() + (rangePresetDays as number) * 24 * 60 * 60 * 1000);
 			max.setHours(23, 59, 59, 999);
-			hasFixedWindow = true;
-		} else {
-			// Placeholder — will be overwritten below after scanning all entries
-			min = new Date();
-			max = new Date();
-		}
 
-		// --- Step 2: Build entry dates cache ---
-		// With a fixed window: use cheap metadata cache for pre-filtering AND date reading.
-		// Only fall back to expensive entry.getValue() if the cache is incomplete.
-		// Without a fixed window: call getEntryDates() for all entries to compute auto-fit range.
-		const entryDatesCache = new Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>();
-		const startPropName = config.startDateProp && String(config.startDateProp).startsWith('note.')
-			? this.getPropertyName(config.startDateProp)
-			: null;
-		const endPropName = config.endDateProp && String(config.endDateProp).startsWith('note.')
-			? this.getPropertyName(config.endDateProp)
-			: null;
+			// Render canvas structure synchronously — visible immediately
+			const scrollerEl = this.bodyEl.createDiv({ cls: 'bases-timeline-scroller' });
+			const canvasEl = scrollerEl.createDiv({ cls: 'bases-timeline-canvas' });
+			const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
+			const zoom = Math.max(config.zoom, 1);
+			if (config.timeScale === 'day') {
+				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 44 * zoom)}px`;
+			} else if (config.timeScale === 'week') {
+				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
+			} else if (config.timeScale === 'month') {
+				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 55 * zoom)}px`;
+			} else {
+				canvasEl.style.width = `calc(${config.labelColWidth}px + ${zoom * this.getScaleZoomFactor(config.timeScale) * 100}%)`;
+			}
+			this.renderTimeAxis(canvasEl, min, max, config, ticks);
+			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.labelColWidth);
+			this.attachRowClickHandler(canvasEl);
 
-		for (const entry of entries) {
-			if (hasFixedWindow && startPropName) {
-				const fmCache = this.app.metadataCache.getFileCache(entry.file)?.frontmatter;
-				if (fmCache) {
-					// Parse start from frontmatter cache
-					const startRaw = fmCache[startPropName];
-					const start = this.parseRawFrontmatterDate(startRaw);
+			// Defer all entry work async — yields to browser between chunks
+			const seq = ++this._renderSeq;
+			const startPropName = String(config.startDateProp).startsWith('note.')
+				? this.getPropertyName(config.startDateProp!) : null;
+			const endPropName = config.endDateProp && String(config.endDateProp).startsWith('note.')
+				? this.getPropertyName(config.endDateProp) : null;
+			const entryDatesCache = new Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>();
+			const CHUNK = 100;
 
-					// Skip entries whose start is clearly after window end
-					if (start && start > max) {
-						entryDatesCache.set(entry, null);
-						continue;
+			(async () => {
+				let rowIndex = 0;
+				for (const group of groups) {
+					if (this._renderSeq !== seq) return;
+
+					const isGrouped = this.data.groupedData.length > 1 || group.hasKey();
+					if (isGrouped) {
+						const groupLabel = group.key && !Value.equals(group.key, NullValue.value)
+							? group.key.toString() : 'Ungrouped';
+						canvasEl.createDiv({ cls: 'bases-timeline-group', text: groupLabel });
 					}
 
-					// If start is present, try reading end from cache too
-					if (start) {
-						const endRaw = endPropName ? fmCache[endPropName] : undefined;
-						const hasEnd = endRaw != null && endRaw !== '' && endRaw !== false;
-						const end = hasEnd ? this.parseRawFrontmatterDate(endRaw) : null;
-
-						if (!hasEnd || end) {
-							const effectiveEnd = end ?? new Date(start.getTime());
-							if (start.getTime() <= effectiveEnd.getTime()) {
-								// Full dates resolved from cache — skip entry.getValue() entirely
-								entryDatesCache.set(entry, { start, end: effectiveEnd, isPoint: !hasEnd });
-								continue;
-							}
+					const groupEntries = group.entries;
+					for (let i = 0; i < groupEntries.length; i++) {
+						// Yield to browser every CHUNK entries
+						if (i > 0 && i % CHUNK === 0) {
+							await new Promise<void>(r => setTimeout(r, 0));
+							if (this._renderSeq !== seq) return;
 						}
+
+						const entry = groupEntries[i];
+
+						// Resolve dates using metadata cache (fast), fall back to Bases API
+						let dates = entryDatesCache.get(entry);
+						if (dates === undefined) {
+							dates = this.resolveEntryDatesFromCache(entry, startPropName, endPropName, min, max, config);
+							entryDatesCache.set(entry, dates);
+						}
+
+						// Skip entries outside the render window
+						if (dates && (dates.end < min || dates.start > max)) continue;
+
+						this.renderRow(canvasEl, entry, config, min, max, rowIndex % 2 === 0, ticks, entryDatesCache);
+						rowIndex++;
 					}
 				}
-			}
-			// Fall back to authoritative Bases API
-			entryDatesCache.set(entry, this.getEntryDates(entry, config.startDateProp!, config.endDateProp!));
-		}
+			})();
 
-		// --- Step 3: Auto-fit range if no fixed window ---
-		if (!hasFixedWindow) {
+		} else {
+			// Auto-fit: compute range from all entries synchronously (small dataset path)
+			const entries = groups.flatMap(g => g.entries);
+			const entryDatesCache = new Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>();
 			let minDate: Date | null = null;
 			let maxDate: Date | null = null;
-			for (const dates of entryDatesCache.values()) {
+			for (const entry of entries) {
+				const dates = this.getEntryDates(entry, config.startDateProp!, config.endDateProp!);
+				entryDatesCache.set(entry, dates);
 				if (!dates) continue;
 				if (!minDate || dates.start < minDate) minDate = dates.start;
 				if (!maxDate || dates.end > maxDate) maxDate = dates.end;
@@ -439,8 +455,8 @@ export class TimelineView extends BasesView {
 				this.bodyEl.createDiv({ cls: 'bases-timeline-empty', text: 'No tasks match the current filtered view.' });
 				return;
 			}
-			min = this.snapStartToScale(minDate, config.timeScale, config.weekStart);
-			max = this.snapEndToScale(maxDate, config.timeScale, config.weekStart);
+			let min = this.snapStartToScale(minDate, config.timeScale, config.weekStart);
+			let max = this.snapEndToScale(maxDate, config.timeScale, config.weekStart);
 			const weekMs = 7 * 24 * 60 * 60 * 1000;
 			if (config.timeScale === 'week') {
 				min = new Date(min.getTime() - weekMs);
@@ -448,35 +464,64 @@ export class TimelineView extends BasesView {
 			} else if (config.timeScale !== 'day') {
 				max = new Date(max.getTime() + weekMs);
 			}
+
+			const scrollerEl = this.bodyEl.createDiv({ cls: 'bases-timeline-scroller' });
+			const canvasEl = scrollerEl.createDiv({ cls: 'bases-timeline-canvas' });
+			const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
+			const zoom = Math.max(config.zoom, 1);
+			const scaleZoom = this.getScaleZoomFactor(config.timeScale);
+			if (config.timeScale === 'day') {
+				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 44 * zoom)}px`;
+			} else if (config.timeScale === 'week') {
+				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
+			} else if (config.timeScale === 'month') {
+				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 55 * zoom)}px`;
+			} else {
+				canvasEl.style.width = `calc(${config.labelColWidth}px + ${zoom * scaleZoom * 100}%)`;
+			}
+			this.renderTimeAxis(canvasEl, min, max, config, ticks);
+			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.labelColWidth);
+			this.attachRowClickHandler(canvasEl);
+
+			for (const group of groups) {
+				this.renderGroup(canvasEl, group, config, min, max, ticks, entryDatesCache);
+			}
 		}
+	}
 
-		// Single scroller — sticky label column, no split pane, no JS scroll sync needed
-		const scrollerEl = this.bodyEl.createDiv({ cls: 'bases-timeline-scroller' });
-		const canvasEl = scrollerEl.createDiv({ cls: 'bases-timeline-canvas' });
+	/** Resolve entry dates using metadata cache (fast path). Falls back to Bases API if cache is incomplete. */
+	private resolveEntryDatesFromCache(
+		entry: BasesEntry,
+		startPropName: string | null,
+		endPropName: string | null,
+		min: Date,
+		max: Date,
+		config: TimelineConfig
+	): { start: Date; end: Date; isPoint: boolean } | null {
+		if (startPropName) {
+			const fmCache = this.app.metadataCache.getFileCache(entry.file)?.frontmatter;
+			if (fmCache) {
+				const startRaw = fmCache[startPropName];
+				const start = this.parseRawFrontmatterDate(startRaw);
 
-		const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
-		const scaleZoom = this.getScaleZoomFactor(config.timeScale);
-		const zoom = Math.max(config.zoom, 1);
-		if (config.timeScale === 'day') {
-			const timelinePx = Math.max(900, ticks.length * 44 * zoom);
-			canvasEl.style.width = `${config.labelColWidth + timelinePx}px`;
-		} else if (config.timeScale === 'week') {
-			const timelinePx = Math.max(900, ticks.length * 60 * zoom);
-			canvasEl.style.width = `${config.labelColWidth + timelinePx}px`;
-		} else if (config.timeScale === 'month') {
-			const timelinePx = Math.max(900, ticks.length * 55 * zoom);
-			canvasEl.style.width = `${config.labelColWidth + timelinePx}px`;
-		} else {
-			canvasEl.style.width = `calc(${config.labelColWidth}px + ${zoom * scaleZoom * 100}%)`;
+				// Clearly outside window — no need to check end
+				if (start && start > max) return null;
+
+				if (start) {
+					const endRaw = endPropName ? fmCache[endPropName] : undefined;
+					const hasEnd = endRaw != null && endRaw !== '' && endRaw !== false;
+					const end = hasEnd ? this.parseRawFrontmatterDate(endRaw) : null;
+					if (!hasEnd || end) {
+						const effectiveEnd = end ?? new Date(start.getTime());
+						if (start.getTime() <= effectiveEnd.getTime()) {
+							return { start, end: effectiveEnd, isPoint: !hasEnd };
+						}
+					}
+				}
+			}
 		}
-
-		this.renderTimeAxis(canvasEl, min, max, config, ticks);
-		this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.labelColWidth);
-		this.attachRowClickHandler(canvasEl);
-
-		for (const group of groups) {
-			this.renderGroup(canvasEl, group, config, min, max, ticks, entryDatesCache);
-		}
+		// Fall back to authoritative Bases API
+		return this.getEntryDates(entry, config.startDateProp!, config.endDateProp!);
 	}
 
 
