@@ -802,7 +802,7 @@ body.bases-timeline-resizing * {
 	border-radius: 4px;
 	background: var(--interactive-accent);
 	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15), inset 0 0 0 1px rgba(255, 255, 255, 0.2);
-	cursor: pointer;
+	cursor: grab;
 	transition: box-shadow 0.15s ease, transform 0.15s ease, filter 0.15s ease;
 	border: 1px solid rgba(0, 0, 0, 0.1);
 	min-width: 4px; /* pixel minimum — never stretches bar beyond its true column span */

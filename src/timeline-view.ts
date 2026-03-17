@@ -938,14 +938,26 @@ export class TimelineView extends BasesView {
 	}
 
 	private attachRowClickHandler(canvasEl: HTMLElement): void {
+		let lastClickTime = 0;
+		let lastClickPath = '';
 		canvasEl.addEventListener('click', (evt: MouseEvent) => {
+			// Ignore clicks that follow a drag operation
+			if (this._dragState) return;
+
 			const target = evt.target as HTMLElement;
 			const rowEl = target.closest('[data-entry-path]') as HTMLElement | null;
 			if (!rowEl) return;
 			const path = rowEl.getAttribute('data-entry-path');
 			if (!path) return;
-			evt.preventDefault();
-			void this.app.workspace.openLinkText(path, '', evt.ctrlKey || evt.metaKey);
+
+			const now = Date.now();
+			const isDouble = (now - lastClickTime < 300) && (path === lastClickPath);
+			if (isDouble) {
+				evt.preventDefault();
+				void this.app.workspace.openLinkText(path, '', evt.ctrlKey || evt.metaKey);
+			}
+			lastClickTime = now;
+			lastClickPath = path;
 		});
 	}
 
