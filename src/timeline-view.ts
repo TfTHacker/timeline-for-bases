@@ -1479,8 +1479,7 @@ export class TimelineView extends BasesView {
 			const binary = atob(base64);
 			const bytes = new Uint8Array(binary.length);
 			for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-			const filePath = normalizePath(`Screenshots/timeline-${Date.now()}.png`);
-			await this.app.vault.adapter.mkdir('Screenshots').catch(() => {});
+			const filePath = normalizePath(`timeline-${Date.now()}.png`);
 			await this.app.vault.adapter.writeBinary(filePath, bytes.buffer as ArrayBuffer);
 			new Notice(`Saved: ${filePath}`);
 		} catch (err) {
