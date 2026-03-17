@@ -464,7 +464,7 @@ export class TimelineView extends BasesView {
 			const weekMs = 7 * 24 * 60 * 60 * 1000;
 			if (config.timeScale === 'week') {
 				min = new Date(min.getTime() - weekMs);
-				max = new Date(max.getTime() + weekMs);
+				max = new Date(max.getTime() + 2 * weekMs); // 2 extra tail weeks
 			} else if (config.timeScale !== 'day') {
 				max = new Date(max.getTime() + weekMs);
 			}
@@ -605,6 +605,12 @@ export class TimelineView extends BasesView {
 			return;
 		}
 
+		// Quarter and year scales: render span-style labels (each tick fills its slot width)
+		if (config.timeScale === 'quarter' || config.timeScale === 'year') {
+			this.renderSpanLabels(labelsEl, resolvedTicks, min, max, config.timeScale);
+			return;
+		}
+
 		visibleTicks.forEach(date => {
 			const total = max.getTime() - min.getTime();
 			const offset = date.getTime() - min.getTime();
@@ -636,6 +642,48 @@ export class TimelineView extends BasesView {
 		});
 	}
 
+	/** Render tick labels as span boxes filling each slot (like day labels), for quarter and year scales. */
+	private renderSpanLabels(labelsEl: HTMLElement, ticks: Date[], min: Date, max: Date, scale: string): void {
+		labelsEl.addClass(`is-${scale}-scale`);
+		const total = max.getTime() - min.getTime();
+
+		for (let i = 0; i < ticks.length; i++) {
+			const date = ticks[i];
+			const startMs = Math.max(min.getTime(), date.getTime());
+			const nextTick = ticks[i + 1];
+			let slotEnd: number;
+			if (scale === 'quarter') {
+				const nextQ = new Date(date);
+				nextQ.setMonth(nextQ.getMonth() + 3, 1);
+				slotEnd = nextTick ? nextTick.getTime() : nextQ.getTime();
+			} else {
+				// year
+				const nextYear = new Date(date);
+				nextYear.setFullYear(nextYear.getFullYear() + 1, 0, 1);
+				slotEnd = nextTick ? nextTick.getTime() : nextYear.getTime();
+			}
+			const endMs = Math.min(max.getTime(), slotEnd);
+			if (endMs <= startMs) continue;
+
+			const leftRatio = total === 0 ? 0 : (startMs - min.getTime()) / total;
+			const widthRatio = total === 0 ? 1 : (endMs - startMs) / total;
+			if (leftRatio > 1.01) continue;
+
+			let label: string;
+			if (scale === 'quarter') {
+				const q = Math.floor(date.getMonth() / 3) + 1;
+				label = `Q${q}`;
+			} else {
+				label = date.getFullYear().toString();
+			}
+
+			const el = labelsEl.createDiv({ cls: `bases-timeline-axis-label is-${scale}-label is-span-label`, text: label });
+			el.style.left = `${leftRatio * 100}%`;
+			el.style.width = `${Math.max(0, widthRatio * 100)}%`;
+			el.setAttribute('title', date.toLocaleDateString());
+		}
+	}
+
 	private renderContextHeader(containerEl: HTMLElement, min: Date, max: Date, scale: string): void {
 		const headerEl = containerEl.createDiv({ cls: 'bases-timeline-context-header', attr: { 'data-scale': scale } });
 		const total = max.getTime() - min.getTime();
@@ -665,77 +713,55 @@ export class TimelineView extends BasesView {
 
 				current.setMonth(current.getMonth() + 1, 1);
 			}
-		} else if (scale === 'month') {
-			// Show year context
+		} else if (scale === 'month' || scale === 'quarter') {
+			// Show quarter spans (Q1/Q2/Q3/Q4) as context for both month and quarter views
 			let current = new Date(min);
-			current.setMonth(0, 1);
-			const yearEnd = new Date(current);
-			yearEnd.setFullYear(yearEnd.getFullYear() + 1, 0, 1);
+			const qStartMonth = Math.floor(current.getMonth() / 3) * 3;
+			current.setMonth(qStartMonth, 1);
+			current.setHours(0, 0, 0, 0);
 
 			while (current <= max) {
+				const q = Math.floor(current.getMonth() / 3) + 1;
+				const nextQ = new Date(current);
+				nextQ.setMonth(nextQ.getMonth() + 3, 1);
+
 				const offset = Math.max(0, current.getTime() - min.getTime());
-				const nextYear = new Date(current);
-				nextYear.setFullYear(nextYear.getFullYear() + 1, 0, 1);
-				const endOffset = Math.min(total, nextYear.getTime() - min.getTime());
+				const endOffset = Math.min(total, nextQ.getTime() - min.getTime());
 				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
 				const left = total === 0 ? 0 : (offset / total) * 100;
 
 				if (width > 0 && left < 100) {
-					const label = current.getFullYear().toString();
-					const yearEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
-					yearEl.style.left = `${left}%`;
-					yearEl.style.width = `${width}%`;
+					const label = `Q${q} ${current.getFullYear()}`;
+					const qEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
+					qEl.style.left = `${left}%`;
+					qEl.style.width = `${width}%`;
 				}
 
-				current.setFullYear(current.getFullYear() + 1);
-			}
-		} else if (scale === 'quarter') {
-			// Show year context with quarter markers
-			let current = new Date(min);
-			current.setMonth(0, 1);
-
-			while (current <= max) {
-				const offset = Math.max(0, current.getTime() - min.getTime());
-				const nextYear = new Date(current);
-				nextYear.setFullYear(nextYear.getFullYear() + 1, 0, 1);
-				const endOffset = Math.min(total, nextYear.getTime() - min.getTime());
-				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
-				const left = total === 0 ? 0 : (offset / total) * 100;
-
-				if (width > 0 && left < 100) {
-					const label = current.getFullYear().toString();
-					const yearEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
-					yearEl.style.left = `${left}%`;
-					yearEl.style.width = `${width}%`;
-				}
-
-				current.setFullYear(current.getFullYear() + 1);
+				current.setMonth(current.getMonth() + 3, 1);
 			}
 		} else if (scale === 'year') {
-			// Show decade context
+			// Show each individual year as a labeled span
 			let current = new Date(min);
-			const decade = Math.floor(current.getFullYear() / 10) * 10;
-			current.setFullYear(decade, 0, 1);
+			current.setMonth(0, 1);
+			current.setHours(0, 0, 0, 0);
 
 			while (current <= max) {
-				const decadeStart = current.getFullYear();
-				const decadeEnd = decadeStart + 9;
-				const decadeEndDate = new Date(current);
-				decadeEndDate.setFullYear(decadeEnd + 1, 0, 1);
+				const nextYear = new Date(current);
+				nextYear.setFullYear(nextYear.getFullYear() + 1, 0, 1);
 
 				const offset = Math.max(0, current.getTime() - min.getTime());
-				const endOffset = Math.min(total, decadeEndDate.getTime() - min.getTime());
+				const endOffset = Math.min(total, nextYear.getTime() - min.getTime());
 				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
 				const left = total === 0 ? 0 : (offset / total) * 100;
 
 				if (width > 0 && left < 100) {
-					const label = `${decadeStart}–${decadeEnd}`;
-					const decadeEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
-					decadeEl.style.left = `${left}%`;
-					decadeEl.style.width = `${width}%`;
+					const label = current.getFullYear().toString();
+					const yearEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
+					yearEl.style.left = `${left}%`;
+					yearEl.style.width = `${width}%`;
 				}
 
-				current.setFullYear(current.getFullYear() + 10);
+				current.setFullYear(current.getFullYear() + 1);
 			}
 		}
 	}
@@ -1075,9 +1101,9 @@ export class TimelineView extends BasesView {
 	}
 
 	private reduceTicks(ticks: Date[], scale: string): Date[] {
-		// day, week, month: never reduce — always show every tick
-		if (scale === 'day' || scale === 'week' || scale === 'month') return ticks;
-		const maxVisible = scale === 'year' ? 10 : 16;
+		// day, week, month, year: never reduce — always show every tick
+		if (scale === 'day' || scale === 'week' || scale === 'month' || scale === 'year') return ticks;
+		const maxVisible = 16;
 		if (ticks.length <= maxVisible) return ticks;
 		const step = Math.ceil(ticks.length / maxVisible);
 		return ticks.filter((_, i) => i % step === 0 || i === ticks.length - 1);

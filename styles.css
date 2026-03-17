@@ -429,6 +429,21 @@
 	overflow: hidden;
 }
 
+/* Quarter and year span labels — fill their slot width like day labels */
+.bases-timeline-axis-label.is-span-label {
+	transform: none;
+	max-width: none;
+	box-sizing: border-box;
+	text-align: center;
+	overflow: hidden;
+	white-space: nowrap;
+	border-left: 1px solid var(--background-modifier-border);
+	padding: 0 4px;
+	font-size: 0.75rem;
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
 
 .bases-timeline-axis-label {
 	position: absolute;
