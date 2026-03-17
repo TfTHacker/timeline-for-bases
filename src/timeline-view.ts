@@ -1199,7 +1199,7 @@ export class TimelineView extends BasesView {
 		const effectiveDuration = dates.isPoint ? 0 : Math.max(0, endMs - startMs);
 
 		const left = total === 0 ? 0 : (startOffset / total) * 100;
-		const width = total === 0 ? 100 : Math.max((effectiveDuration / total) * 100, 0.5);
+		const width = total === 0 ? 100 : (effectiveDuration / total) * 100;
 
 		const barEl = trackEl.createDiv({ cls: 'bases-timeline-bar' });
 		if (dates.isPoint) {

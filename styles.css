@@ -805,6 +805,7 @@ body.bases-timeline-resizing * {
 	cursor: pointer;
 	transition: all 0.15s ease;
 	border: 1px solid rgba(0, 0, 0, 0.1);
+	min-width: 4px; /* pixel minimum — never stretches bar beyond its true column span */
 }
 
 .bases-timeline-bar.is-point {
