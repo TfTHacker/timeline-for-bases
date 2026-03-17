@@ -27,22 +27,9 @@ interface TimelineConfig {
 	labelColWidth: number;
 }
 
-interface ContextSegment {
-	start: Date;
-	end: Date;
-	label: string;
-}
-
-interface EntryRenderMeta {
-	label: string;
-	dates: { start: Date; end: Date; isPoint: boolean } | null;
-	color: string | null;
-}
-
 const LABEL_COLUMN_WIDTH_PX = 175;
 const LABEL_COLUMN_MIN_PX = 80;
 const LABEL_COLUMN_MAX_PX = 500;
-const PROPERTY_SCAN_ENTRY_LIMIT = 2000;
 
 const HUE_VARS = ['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'purple', 'pink'];
 
@@ -239,7 +226,6 @@ export class TimelineView extends BasesView {
 		this.controlsEl.toggleClass('is-collapsed', !isVisible);
 		if (!isVisible) return;
 
-		const entries = this.getVisibleEntries();
 		const allProps = [...(this.allProperties ?? [])].sort((a, b) =>
 			this.getPropertyName(a).localeCompare(this.getPropertyName(b))
 		);
@@ -301,16 +287,8 @@ export class TimelineView extends BasesView {
 
 		if (!config.colorProp) return;
 
-		if (this.shouldDeferPropertyScan(entries.length)) {
-			this.controlsEl.createDiv({
-				cls: 'bases-timeline-controls-empty',
-				text: `Add a Bases filter before loading color values. This view currently has ${entries.length.toLocaleString()} entries.`,
-			});
-			return;
-		}
-
 		// Color pickers for each unique value
-		const uniqueValues = this.getUniqueColorValues(entries, config.colorProp);
+		const uniqueValues = this.getUniqueColorValues(config.colorProp);
 		const { colorMap, changed } = this.ensureColorMap(config.colorMap, uniqueValues);
 		if (changed) {
 			this.config.set('colorMap', colorMap);
@@ -374,22 +352,14 @@ export class TimelineView extends BasesView {
 
 	private renderTimeline(config: TimelineConfig): void {
 		const groups = this.data.groupedData || [];
-		const entries = this.getVisibleEntries();
+		const entries = groups.flatMap(group => group.entries);
 
 		if (!config.startDateProp || !config.endDateProp) {
 			this.bodyEl.createDiv({ cls: 'bases-timeline-empty', text: 'Select start and end date fields in view options.' });
 			return;
 		}
 
-		if (this.shouldDeferPropertyScan(entries.length)) {
-			this.bodyEl.createDiv({
-				cls: 'bases-timeline-empty',
-				text: `Add a Bases filter before loading start and end dates. This view currently has ${entries.length.toLocaleString()} entries.`,
-			});
-			return;
-		}
-
-		const { entryMeta, timelineRange } = this.buildEntryRenderMeta(entries, config);
+		const timelineRange = this.getTimelineRange(entries, config.startDateProp, config.endDateProp, config);
 		if (!timelineRange) {
 			this.bodyEl.createDiv({ cls: 'bases-timeline-empty', text: 'No tasks match the current filtered view.' });
 			return;
@@ -417,17 +387,14 @@ export class TimelineView extends BasesView {
 			canvasEl.style.width = `calc(${config.labelColWidth}px + ${zoom * scaleZoom * 100}%)`;
 		}
 
-		const ticks = this.getTicksForScale(timelineRange.min, timelineRange.max, config.timeScale, config.weekStart);
-		this.renderTimeAxis(canvasEl, timelineRange.min, timelineRange.max, config, ticks);
-		this.renderGridLines(canvasEl, ticks, timelineRange.min, timelineRange.max, config.timeScale, config.weekStart, config.labelColWidth);
-		if (config.timeScale === 'day') {
-			this.renderTodayMarker(canvasEl, timelineRange.min, timelineRange.max, false, config.labelColWidth);
+		this.renderTimeAxis(canvasEl, timelineRange.min, timelineRange.max, config);
+
+		for (const group of groups) {
+			this.renderGroup(canvasEl, group, config, timelineRange.min, timelineRange.max);
 		}
 
-		this.attachRowClickHandler(canvasEl);
-		for (const group of groups) {
-			this.renderGroup(canvasEl, group, config, timelineRange.min, timelineRange.max, entryMeta);
-		}
+		// Today marker is rendered per-row inside each track (see renderRow)
+		// so it stays within the timeline area and never scrolls behind the Notes column
 	}
 
 
@@ -476,7 +443,7 @@ export class TimelineView extends BasesView {
 		markerEl.setAttribute('title', `Today: ${today.toLocaleDateString()}`);
 	}
 
-	private renderTimeAxis(containerEl: HTMLElement, min: Date, max: Date, config: TimelineConfig, ticks: Date[]): void {
+	private renderTimeAxis(containerEl: HTMLElement, min: Date, max: Date, config: TimelineConfig): void {
 		const axisEl = containerEl.createDiv({ cls: 'bases-timeline-axis' });
 		axisEl.setAttribute('data-scale', config.timeScale);
 
@@ -495,6 +462,7 @@ export class TimelineView extends BasesView {
 		labelsEl.setAttribute('data-scale', config.timeScale);
 		labelsEl.addClass('has-context');
 
+		const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
 		const visibleTicks = this.reduceTicks(ticks, config.timeScale);
 		const formatter = this.getAxisFormatter(min, max, config.timeScale);
 
@@ -536,106 +504,105 @@ export class TimelineView extends BasesView {
 
 	private renderContextHeader(containerEl: HTMLElement, min: Date, max: Date, scale: string): void {
 		const headerEl = containerEl.createDiv({ cls: 'bases-timeline-context-header', attr: { 'data-scale': scale } });
-		const segments = this.getContextSegments(min, max, scale);
-		this.renderContextSegments(headerEl, segments, min, max);
-	}
-
-	private getContextSegments(min: Date, max: Date, scale: string): ContextSegment[] {
-		if (scale === 'week') {
-			return this.buildContextSegments(
-				min,
-				max,
-				date => {
-					const current = new Date(date);
-					current.setDate(1);
-					return current;
-				},
-				date => {
-					const next = new Date(date);
-					next.setMonth(next.getMonth() + 1, 1);
-					return next;
-				},
-				date => new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' }).format(date),
-			);
-		}
-
-		if (scale === 'month' || scale === 'quarter') {
-			return this.buildContextSegments(
-				min,
-				max,
-				date => {
-					const current = new Date(date);
-					current.setMonth(0, 1);
-					return current;
-				},
-				date => {
-					const next = new Date(date);
-					next.setFullYear(next.getFullYear() + 1, 0, 1);
-					return next;
-				},
-				date => date.getFullYear().toString(),
-			);
-		}
-
-		if (scale === 'year') {
-			return this.buildContextSegments(
-				min,
-				max,
-				date => {
-					const current = new Date(date);
-					const decade = Math.floor(current.getFullYear() / 10) * 10;
-					current.setFullYear(decade, 0, 1);
-					return current;
-				},
-				date => {
-					const next = new Date(date);
-					next.setFullYear(next.getFullYear() + 10, 0, 1);
-					return next;
-				},
-				date => `${date.getFullYear()}–${date.getFullYear() + 9}`,
-			);
-		}
-
-		return [];
-	}
-
-	private buildContextSegments(
-		min: Date,
-		max: Date,
-		alignStart: (date: Date) => Date,
-		getNext: (date: Date) => Date,
-		getLabel: (date: Date) => string,
-	): ContextSegment[] {
-		const segments: ContextSegment[] = [];
-		let current = alignStart(min);
-
-		while (current <= max) {
-			const next = getNext(current);
-			segments.push({
-				start: new Date(current),
-				end: next,
-				label: getLabel(current),
-			});
-			current = next;
-		}
-
-		return segments;
-	}
-
-	private renderContextSegments(headerEl: HTMLElement, segments: ContextSegment[], min: Date, max: Date): void {
 		const total = max.getTime() - min.getTime();
 
-		for (const segment of segments) {
-			const offset = Math.max(0, segment.start.getTime() - min.getTime());
-			const endOffset = Math.min(total, segment.end.getTime() - min.getTime());
-			const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
-			const left = total === 0 ? 0 : (offset / total) * 100;
+		if (scale === 'week') {
+			// Show month context
+			const monthStart = new Date(min);
+			monthStart.setDate(1);
+			const monthEnd = new Date(monthStart);
+			monthEnd.setMonth(monthEnd.getMonth() + 1, 0);
 
-			if (width <= 0 || left >= 100) continue;
+			let current = new Date(monthStart);
+			while (current <= max) {
+				const offset = Math.max(0, current.getTime() - min.getTime());
+				const nextMonth = new Date(current);
+				nextMonth.setMonth(nextMonth.getMonth() + 1, 1);
+				const endOffset = Math.min(total, nextMonth.getTime() - min.getTime());
+				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
+				const left = total === 0 ? 0 : (offset / total) * 100;
 
-			const segmentEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: segment.label });
-			segmentEl.style.left = `${left}%`;
-			segmentEl.style.width = `${width}%`;
+				if (width > 0 && left < 100) {
+					const label = new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' }).format(current);
+					const monthEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
+					monthEl.style.left = `${left}%`;
+					monthEl.style.width = `${width}%`;
+				}
+
+				current.setMonth(current.getMonth() + 1, 1);
+			}
+		} else if (scale === 'month') {
+			// Show year context
+			let current = new Date(min);
+			current.setMonth(0, 1);
+			const yearEnd = new Date(current);
+			yearEnd.setFullYear(yearEnd.getFullYear() + 1, 0, 1);
+
+			while (current <= max) {
+				const offset = Math.max(0, current.getTime() - min.getTime());
+				const nextYear = new Date(current);
+				nextYear.setFullYear(nextYear.getFullYear() + 1, 0, 1);
+				const endOffset = Math.min(total, nextYear.getTime() - min.getTime());
+				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
+				const left = total === 0 ? 0 : (offset / total) * 100;
+
+				if (width > 0 && left < 100) {
+					const label = current.getFullYear().toString();
+					const yearEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
+					yearEl.style.left = `${left}%`;
+					yearEl.style.width = `${width}%`;
+				}
+
+				current.setFullYear(current.getFullYear() + 1);
+			}
+		} else if (scale === 'quarter') {
+			// Show year context with quarter markers
+			let current = new Date(min);
+			current.setMonth(0, 1);
+
+			while (current <= max) {
+				const offset = Math.max(0, current.getTime() - min.getTime());
+				const nextYear = new Date(current);
+				nextYear.setFullYear(nextYear.getFullYear() + 1, 0, 1);
+				const endOffset = Math.min(total, nextYear.getTime() - min.getTime());
+				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
+				const left = total === 0 ? 0 : (offset / total) * 100;
+
+				if (width > 0 && left < 100) {
+					const label = current.getFullYear().toString();
+					const yearEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
+					yearEl.style.left = `${left}%`;
+					yearEl.style.width = `${width}%`;
+				}
+
+				current.setFullYear(current.getFullYear() + 1);
+			}
+		} else if (scale === 'year') {
+			// Show decade context
+			let current = new Date(min);
+			const decade = Math.floor(current.getFullYear() / 10) * 10;
+			current.setFullYear(decade, 0, 1);
+
+			while (current <= max) {
+				const decadeStart = current.getFullYear();
+				const decadeEnd = decadeStart + 9;
+				const decadeEndDate = new Date(current);
+				decadeEndDate.setFullYear(decadeEnd + 1, 0, 1);
+
+				const offset = Math.max(0, current.getTime() - min.getTime());
+				const endOffset = Math.min(total, decadeEndDate.getTime() - min.getTime());
+				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
+				const left = total === 0 ? 0 : (offset / total) * 100;
+
+				if (width > 0 && left < 100) {
+					const label = `${decadeStart}–${decadeEnd}`;
+					const decadeEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
+					decadeEl.style.left = `${left}%`;
+					decadeEl.style.width = `${width}%`;
+				}
+
+				current.setFullYear(current.getFullYear() + 10);
+			}
 		}
 	}
 
@@ -690,31 +657,20 @@ export class TimelineView extends BasesView {
 	private renderDayLabels(labelsEl: HTMLElement, dayTicks: Date[], min: Date, max: Date, weekStart: 'monday' | 'sunday'): void {
 		labelsEl.addClass('is-day-scale');
 		const total = max.getTime() - min.getTime();
-		const oneDayMs = 1000 * 60 * 60 * 24;
 
 		for (let i = 0; i < dayTicks.length; i++) {
 			const date = dayTicks[i];
-			const startMs = Math.max(min.getTime(), date.getTime());
-			const nextTick = dayTicks[i + 1];
-			const endMs = Math.min(max.getTime(), nextTick ? nextTick.getTime() : date.getTime() + oneDayMs);
-			if (endMs <= startMs) continue;
+			const offset = date.getTime() - min.getTime();
+			const ratio = total === 0 ? 0 : offset / total;
+			if (ratio < -0.01 || ratio > 1.01) continue;
 
-			const leftRatio = total === 0 ? 0 : (startMs - min.getTime()) / total;
-			const widthRatio = total === 0 ? 1 : (endMs - startMs) / total;
-			if (leftRatio < -0.01 || leftRatio > 1.01) continue;
-
-			const weekday = this.getCompactWeekdayLabel(date, weekStart);
+			const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(date).slice(0, 2);
 			const dayEl = labelsEl.createDiv({ cls: 'bases-timeline-axis-label is-day-label', text: `${weekday} ${date.getDate()}` });
-			dayEl.style.left = `${leftRatio * 100}%`;
-			dayEl.style.width = `${Math.max(0, widthRatio * 100)}%`;
+			dayEl.style.left = `${ratio * 100}%`;
+			if (ratio < 0.03) dayEl.style.transform = 'translateX(0)';
+			else if (ratio > 0.97) dayEl.style.transform = 'translateX(-100%)';
+			else dayEl.style.transform = 'translateX(-50%)';
 		}
-	}
-
-	private getCompactWeekdayLabel(date: Date, weekStart: 'monday' | 'sunday'): string {
-		const mondayLabels = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
-		const sundayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
-		const labels = weekStart === 'sunday' ? sundayLabels : mondayLabels;
-		return labels[date.getDay()] ?? new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(date).slice(0, 2);
 	}
 
 	private attachResizeHandle(labelEl: HTMLElement, config: TimelineConfig): void {
@@ -820,11 +776,11 @@ export class TimelineView extends BasesView {
 		}
 	}
 
-	private renderGridLines(containerEl: HTMLElement, ticks: Date[], min: Date, max: Date, scale: string, weekStart: 'monday' | 'sunday', labelColWidth: number): void {
+	private renderGridLines(containerEl: HTMLElement, ticks: Date[], min: Date, max: Date, scale: string, weekStart: 'monday' | 'sunday'): void {
 		const gridEl = containerEl.createDiv({ cls: 'bases-timeline-grid' });
 		// Offset grid past the sticky label column
-		gridEl.style.left = `${labelColWidth}px`;
-		gridEl.style.width = `calc(100% - ${labelColWidth}px)`;
+		gridEl.style.left = `${LABEL_COLUMN_WIDTH_PX}px`;
+		gridEl.style.width = `calc(100% - ${LABEL_COLUMN_WIDTH_PX}px)`;
 		const total = max.getTime() - min.getTime();
 		const weekBoundaryRatios: number[] = [];
 
@@ -895,8 +851,8 @@ export class TimelineView extends BasesView {
 
 		if (scale === 'day' && weekBoundaryRatios.length > 0) {
 			const overlayEl = containerEl.createDiv({ cls: 'bases-timeline-week-boundary-overlay' });
-			overlayEl.style.left = `${labelColWidth}px`;
-			overlayEl.style.width = `calc(100% - ${labelColWidth}px)`;
+			overlayEl.style.left = `${LABEL_COLUMN_WIDTH_PX}px`;
+			overlayEl.style.width = `calc(100% - ${LABEL_COLUMN_WIDTH_PX}px)`;
 			const unique = Array.from(new Set(weekBoundaryRatios.map(r => Number(r.toFixed(6)))));
 			for (const ratio of unique) {
 				if (ratio < 0 || ratio > 1) continue;
@@ -907,8 +863,8 @@ export class TimelineView extends BasesView {
 
 		if (scale === 'week') {
 			const overlayEl = containerEl.createDiv({ cls: 'bases-timeline-week-grid-overlay' });
-			overlayEl.style.left = `${labelColWidth}px`;
-			overlayEl.style.width = `calc(100% - ${labelColWidth}px)`;
+			overlayEl.style.left = `${LABEL_COLUMN_WIDTH_PX}px`;
+			overlayEl.style.width = `calc(100% - ${LABEL_COLUMN_WIDTH_PX}px)`;
 			for (const tick of ticks) {
 				const ratio = total === 0 ? 0 : (tick.getTime() - min.getTime()) / total;
 				if (ratio < 0 || ratio > 1) continue;
@@ -970,58 +926,66 @@ export class TimelineView extends BasesView {
 		return ticks.filter((_, i) => i % step === 0 || i === ticks.length - 1);
 	}
 
-	private renderGroup(
-		containerEl: HTMLElement,
-		group: BasesEntryGroup,
-		config: TimelineConfig,
-		min: Date,
-		max: Date,
-		entryMeta: Map<BasesEntry, EntryRenderMeta>,
-	): void {
+	private renderGroup(containerEl: HTMLElement, group: BasesEntryGroup, config: TimelineConfig, min: Date, max: Date): void {
 		const isGrouped = this.data.groupedData.length > 1 || group.hasKey();
 		if (isGrouped) {
-			const groupLabel = this.getGroupLabel(group);
+			const groupLabel = group.key && !Value.equals(group.key, NullValue.value)
+				? group.key.toString()
+				: 'Ungrouped';
 			containerEl.createDiv({ cls: 'bases-timeline-group', text: groupLabel });
 		}
 
+		const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
 		group.entries.forEach((entry, index) => {
-			this.renderRow(containerEl, entry, config, min, max, index % 2 === 0, entryMeta);
+			this.renderRow(containerEl, entry, config, min, max, index % 2 === 0, ticks);
 		});
 	}
 
-	private renderRow(
-		containerEl: HTMLElement,
-		entry: BasesEntry,
-		config: TimelineConfig,
-		min: Date,
-		max: Date,
-		isEven: boolean = false,
-		entryMeta?: Map<BasesEntry, EntryRenderMeta>,
-	): void {
+	private renderRow(containerEl: HTMLElement, entry: BasesEntry, config: TimelineConfig, min: Date, max: Date, isEven: boolean = false, ticks?: Date[]): void {
 		const rowEl = containerEl.createDiv({ cls: 'bases-timeline-row' });
-		this.populateRow(rowEl, entry, config, min, max, isEven, entryMeta);
-	}
-
-	private populateRow(
-		rowEl: HTMLElement,
-		entry: BasesEntry,
-		config: TimelineConfig,
-		min: Date,
-		max: Date,
-		isEven: boolean = false,
-		entryMeta?: Map<BasesEntry, EntryRenderMeta>,
-	): void {
 		if (isEven) rowEl.addClass('is-even');
 
-		const meta = entryMeta?.get(entry);
-		const label = meta?.label ?? this.getEntryLabel(entry, config.labelProp);
+		const label = this.getEntryLabel(entry, config.labelProp);
 		const labelEl = rowEl.createDiv({ cls: 'bases-timeline-label' });
 		labelEl.createEl('span', { text: label });
+		this.attachResizeHandle(labelEl, config);
 
 		const trackEl = rowEl.createDiv({ cls: 'bases-timeline-track' });
-		rowEl.setAttribute('data-entry-path', entry.file.path);
 
-		const dates = meta?.dates ?? this.getEntryDates(entry, config.startDateProp, config.endDateProp);
+		// Render grid lines inside this row's track
+		if (ticks && ticks.length > 0) {
+			this.renderTrackGridLines(trackEl, ticks, min, max, config.timeScale, config.weekStart);
+		}
+
+		// Today marker rendered inside each track so it never bleeds into sticky Notes column
+		if (config.timeScale === 'day') {
+			const today = new Date();
+			today.setHours(0, 0, 0, 0);
+			if (today >= min && today <= max) {
+				const total = max.getTime() - min.getTime();
+				const left = total === 0 ? 0 : ((today.getTime() - min.getTime()) / total) * 100;
+				const todayLine = trackEl.createDiv({ cls: 'bases-timeline-today-marker' });
+				todayLine.style.left = `${left}%`;
+				todayLine.setAttribute('title', `Today: ${today.toLocaleDateString()}`);
+			}
+		}
+
+		const openHandler = (evt: MouseEvent) => {
+			evt.preventDefault();
+			void this.app.workspace.openLinkText(entry.file.path, '', evt.ctrlKey || evt.metaKey);
+		};
+
+		labelEl.addEventListener('click', openHandler);
+
+		// Industry pattern: full-row highlight on hover (like monday.com)
+		rowEl.addEventListener('mouseenter', () => {
+			rowEl.addClass('is-active-hover');
+		});
+		rowEl.addEventListener('mouseleave', () => {
+			rowEl.removeClass('is-active-hover');
+		});
+
+		const dates = this.getEntryDates(entry, config.startDateProp, config.endDateProp);
 		if (!dates) {
 			rowEl.addClass('is-missing');
 			labelEl.addClass('is-missing');
@@ -1046,39 +1010,18 @@ export class TimelineView extends BasesView {
 		barEl.style.left = `${left}%`;
 		barEl.style.width = `${width}%`;
 
-		const color = meta?.color ?? this.getEntryColor(entry, config.colorProp, config.colorMap);
+		const color = this.getEntryColor(entry, config.colorProp, config.colorMap);
 		if (color) {
 			barEl.style.backgroundColor = color;
 		}
 
+		barEl.addEventListener('click', openHandler);
+
 		barEl.setAttribute('title', `${label} (${dates.start.toLocaleDateString()} → ${dates.end.toLocaleDateString()})`);
-	}
-
-	private getGroupLabel(group: BasesEntryGroup): string {
-		return group.key && !Value.equals(group.key, NullValue.value)
-			? group.key.toString()
-			: 'Ungrouped';
-	}
-
-	private attachRowClickHandler(containerEl: HTMLElement): void {
-		containerEl.addEventListener('click', (evt: MouseEvent) => {
-			const target = evt.target as HTMLElement | null;
-			if (!target) return;
-			const hit = target.closest('.bases-timeline-label, .bases-timeline-bar');
-			if (!hit) return;
-			const row = hit.closest('.bases-timeline-row');
-			if (!row) return;
-			const path = row.getAttribute('data-entry-path');
-			if (!path) return;
-			evt.preventDefault();
-			void this.app.workspace.openLinkText(path, '', evt.ctrlKey || evt.metaKey);
-		});
 	}
 
 	private getEntryLabel(entry: BasesEntry, labelProp: BasesPropertyId | null): string {
 		if (labelProp) {
-			const cached = this.getFrontmatterValue(entry, labelProp);
-			if (cached != null && cached !== '') return String(cached);
 			const value = entry.getValue(labelProp);
 			if (value && value.isTruthy()) return value.toString();
 		}
@@ -1129,128 +1072,7 @@ export class TimelineView extends BasesView {
 		return null;
 	}
 
-	private getFrontmatterValue(entry: BasesEntry, prop: BasesPropertyId | null): unknown | null {
-		if (!prop) return null;
-		const propId = String(prop);
-		if (!propId.startsWith('note.')) return null;
-		const cache = this.app.metadataCache.getFileCache(entry.file);
-		if (!cache || !cache.frontmatter) return null;
-		const key = this.getPropertyName(prop);
-		if (!(key in cache.frontmatter)) return null;
-		return cache.frontmatter[key];
-	}
-
-	private parseDateFromFrontmatter(value: unknown): Date | null {
-		if (value instanceof Date) {
-			return new Date(value.getTime());
-		}
-		if (typeof value === 'number') {
-			const parsed = new Date(value);
-			return Number.isNaN(parsed.getTime()) ? null : parsed;
-		}
-		if (typeof value === 'string') {
-			const parsed = Date.parse(value);
-			if (!Number.isNaN(parsed)) return new Date(parsed);
-			const dateValue = DateValue.parseFromString(value);
-			if (dateValue) {
-				const parsedDate = Date.parse(dateValue.toString());
-				return Number.isNaN(parsedDate) ? null : new Date(parsedDate);
-			}
-		}
-		return null;
-	}
-
-	private buildEntryRenderMeta(
-		entries: BasesEntry[],
-		config: TimelineConfig,
-	): { entryMeta: Map<BasesEntry, EntryRenderMeta>; timelineRange: { min: Date; max: Date } | null } {
-		// Use the proven original range computation (entry.getValue path), not the cached path,
-		// so bar positioning is always correct regardless of metadata cache state.
-		const timelineRange = this.getTimelineRange(entries, config.startDateProp, config.endDateProp, config);
-
-		// Build label/color cache independently for render-pass speed.
-		const entryMeta = new Map<BasesEntry, EntryRenderMeta>();
-		const dateCache = new Map<Value, Date | null>();
-		const startProp = config.startDateProp;
-		const endProp = config.endDateProp;
-		const labelProp = config.labelProp;
-		const colorProp = config.colorProp;
-
-		for (const entry of entries) {
-			const label = this.getEntryLabel(entry, labelProp);
-			const dates = this.getEntryDatesCached(entry, startProp, endProp, dateCache);
-			const color = this.getEntryColor(entry, colorProp, config.colorMap);
-			entryMeta.set(entry, { label, dates, color });
-		}
-
-		return { entryMeta, timelineRange };
-	}
-
-	private getEntryDatesCached(
-		entry: BasesEntry,
-		startProp: BasesPropertyId | null,
-		endProp: BasesPropertyId | null,
-		dateCache: Map<Value, Date | null>,
-	): { start: Date; end: Date; isPoint: boolean } | null {
-		if (!startProp || !endProp) return null;
-
-		let start: Date | null = null;
-		let end: Date | null = null;
-
-		const cachedStartRaw = this.getFrontmatterValue(entry, startProp);
-		if (cachedStartRaw != null) {
-			start = this.parseDateFromFrontmatter(cachedStartRaw);
-		}
-
-		const cachedEndRaw = this.getFrontmatterValue(entry, endProp);
-		let hasEndValue = cachedEndRaw != null;
-		if (cachedEndRaw != null) {
-			end = this.parseDateFromFrontmatter(cachedEndRaw);
-		}
-
-		if (!start) {
-			const startValue = entry.getValue(startProp);
-			start = this.parseDateValueCached(startValue, dateCache);
-		}
-
-		if (cachedEndRaw == null || (hasEndValue && !end)) {
-			const endValue = entry.getValue(endProp);
-			hasEndValue = Boolean(endValue && endValue.isTruthy());
-			end = this.parseDateValueCached(endValue, dateCache);
-		}
-
-		if (!start) return null;
-		if (hasEndValue && !end) {
-			// End date exists but is invalid/unparseable: do not force point rendering.
-			return null;
-		}
-
-		const isPoint = !hasEndValue;
-		if (!end) end = new Date(start.getTime());
-		if (start.getTime() > end.getTime()) return null;
-
-		return { start, end, isPoint };
-	}
-
-	private parseDateValueCached(value: Value | null, dateCache: Map<Value, Date | null>): Date | null {
-		if (!value || !value.isTruthy()) return null;
-		if (dateCache.has(value)) return dateCache.get(value) ?? null;
-		const parsed = this.parseDateValue(value);
-		dateCache.set(value, parsed);
-		return parsed;
-	}
-
-	private getScaleZoomFactor(scale: string): number {
-		if (scale === 'day') return 2.4;
-		if (scale === 'week') return 3.1;
-		if (scale === 'month') return 1.15;
-		if (scale === 'quarter') return 1;
-		if (scale === 'year') return 0.9;
-		return 1;
-	}
-
-	private getTimelineRange(entries: BasesEntry[], startProp: BasesPropertyId | null, endProp: BasesPropertyId | null, config: TimelineConfig): { min: Date; max: Date } | null {
-		if (!startProp || !endProp) return null;
+	private getTimelineRange(entries: BasesEntry[], startProp: BasesPropertyId, endProp: BasesPropertyId, config: TimelineConfig): { min: Date; max: Date } | null {
 		let min: Date | null = null;
 		let max: Date | null = null;
 
@@ -1266,8 +1088,10 @@ export class TimelineView extends BasesView {
 		min = this.snapStartToScale(min, config.timeScale, config.weekStart);
 		max = this.snapEndToScale(max, config.timeScale, config.weekStart);
 
+		// Padding so bars/labels don't sit flush at edges
 		const weekMs = 7 * 24 * 60 * 60 * 1000;
 		if (config.timeScale === 'week') {
+			// One week before and after for week scale
 			min = new Date(min.getTime() - weekMs);
 			max = new Date(max.getTime() + weekMs);
 		} else if (config.timeScale !== 'day') {
@@ -1275,6 +1099,15 @@ export class TimelineView extends BasesView {
 		}
 
 		return { min, max };
+	}
+
+	private getScaleZoomFactor(scale: string): number {
+		if (scale === 'day') return 2.4;
+		if (scale === 'week') return 3.1;
+		if (scale === 'month') return 1.15;
+		if (scale === 'quarter') return 1;
+		if (scale === 'year') return 0.9;
+		return 1;
 	}
 
 	private snapStartToScale(date: Date, scale: string, weekStart: 'monday' | 'sunday' = 'monday'): Date {
@@ -1362,17 +1195,9 @@ export class TimelineView extends BasesView {
 		return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
 	}
 
-	private getVisibleEntries(): BasesEntry[] {
-		return (this.data.groupedData || []).flatMap(group => group.entries);
-	}
-
-	private shouldDeferPropertyScan(entryCount: number): boolean {
-		return entryCount > PROPERTY_SCAN_ENTRY_LIMIT;
-	}
-
-	private getUniqueColorValues(entries: BasesEntry[], colorProp: BasesPropertyId): string[] {
+	private getUniqueColorValues(colorProp: BasesPropertyId): string[] {
 		const values = new Set<string>();
-		for (const entry of entries) {
+		for (const entry of this.data.data) {
 			const value = entry.getValue(colorProp);
 			if (!value || !value.isTruthy()) continue;
 			values.add(value.toString());
@@ -1394,11 +1219,6 @@ export class TimelineView extends BasesView {
 
 	private getEntryColor(entry: BasesEntry, colorProp: BasesPropertyId | null, colorMap: Record<string, string>): string | null {
 		if (!colorProp) return null;
-		const cached = this.getFrontmatterValue(entry, colorProp);
-		if (cached != null && cached !== '') {
-			const key = String(cached);
-			return colorMap[key] || null;
-		}
 		const value = entry.getValue(colorProp);
 		if (!value || !value.isTruthy()) return null;
 		const key = value.toString();
