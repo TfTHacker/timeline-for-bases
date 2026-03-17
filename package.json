@@ -29,8 +29,6 @@
 		"typescript": "5.9.3"
 	},
 	"dependencies": {
-		"dhtmlx-gantt": "^9.1.2",
-		"frappe-gantt": "^1.2.2",
 		"html2canvas": "^1.4.1"
 	}
 }
