@@ -938,8 +938,8 @@ export class TimelineView extends BasesView {
 	}
 
 	private attachRowClickHandler(canvasEl: HTMLElement): void {
-		let lastClickTime = 0;
-		let lastClickPath = '';
+		let lastBarClickTime = 0;
+		let lastBarClickPath = '';
 		canvasEl.addEventListener('click', (evt: MouseEvent) => {
 			// Ignore clicks that follow a drag operation
 			if (this._dragState) return;
@@ -950,14 +950,27 @@ export class TimelineView extends BasesView {
 			const path = rowEl.getAttribute('data-entry-path');
 			if (!path) return;
 
-			const now = Date.now();
-			const isDouble = (now - lastClickTime < 300) && (path === lastClickPath);
-			if (isDouble) {
+			// Single click on label → open note
+			const isLabel = target.closest('.bases-timeline-label');
+			if (isLabel) {
 				evt.preventDefault();
 				void this.app.workspace.openLinkText(path, '', evt.ctrlKey || evt.metaKey);
+				return;
 			}
-			lastClickTime = now;
-			lastClickPath = path;
+
+			// Double‑click on bar → open note
+			const isBar = target.closest('.bases-timeline-bar') && !target.closest('.bases-timeline-bar-handle');
+			if (isBar) {
+				const now = Date.now();
+				const isDouble = (now - lastBarClickTime < 300) && (path === lastBarClickPath);
+				if (isDouble) {
+					evt.preventDefault();
+					void this.app.workspace.openLinkText(path, '', evt.ctrlKey || evt.metaKey);
+				}
+				lastBarClickTime = now;
+				lastBarClickPath = path;
+				return;
+			}
 		});
 	}
 
@@ -1356,7 +1369,11 @@ export class TimelineView extends BasesView {
 			newEnd = rawEnd < s.origStart ? new Date(s.origStart) : rawEnd;
 			const excl = new Date(newEnd); excl.setDate(excl.getDate() + 1);
 			const widthMs = excl.getTime() - newStart.getTime();
-			s.barEl.style.width = `${Math.max(0, (widthMs / s.totalMs) * 100)}%`;
+			const widthPct = Math.max(0.5, (widthMs / s.totalMs) * 100);
+			// keep left where it is
+			const left = parseFloat(s.barEl.style.left) || 0;
+			s.barEl.style.left = `${Math.min(left, 100 - widthPct)}%`;
+			s.barEl.style.width = `${Math.min(widthPct, 100 - parseFloat(s.barEl.style.left))}%`;
 
 		} else { // resize-start
 			const rawStart = this._localMidnight(new Date(s.origStart.getTime() + deltaDays * dayMs));
@@ -1366,8 +1383,10 @@ export class TimelineView extends BasesView {
 			const newLeftMs = newStart.getTime() - s.rangeMin.getTime();
 			const excl = new Date(newEnd); excl.setDate(excl.getDate() + 1);
 			const widthMs = excl.getTime() - newStart.getTime();
-			s.barEl.style.left  = `${(newLeftMs / s.totalMs) * 100}%`;
-			s.barEl.style.width = `${Math.max(0, (widthMs / s.totalMs) * 100)}%`;
+			const leftPct = (newLeftMs / s.totalMs) * 100;
+			const widthPct = Math.max(0.5, (widthMs / s.totalMs) * 100);
+			s.barEl.style.left  = `${Math.max(0, Math.min(leftPct, 100 - widthPct))}%`;
+			s.barEl.style.width = `${Math.min(widthPct, 100 - parseFloat(s.barEl.style.left))}%`;
 		}
 
 		this._refreshTooltip(newStart, newEnd);
