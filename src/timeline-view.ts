@@ -1381,14 +1381,32 @@ export class TimelineView extends BasesView {
 	): { start: Date; end: Date; isPoint: boolean } | null {
 		if (!startProp || !endProp) return null;
 
-		const startValue = entry.getValue(startProp);
-		const endValue = entry.getValue(endProp);
-		const start = this.parseDateValueCached(startValue, dateCache);
-		let end = this.parseDateValueCached(endValue, dateCache);
+		let start: Date | null = null;
+		let end: Date | null = null;
+
+		const cachedStartRaw = this.getFrontmatterValue(entry, startProp);
+		if (cachedStartRaw != null) {
+			start = this.parseDateFromFrontmatter(cachedStartRaw);
+		}
+
+		const cachedEndRaw = this.getFrontmatterValue(entry, endProp);
+		let hasEndValue = cachedEndRaw != null;
+		if (cachedEndRaw != null) {
+			end = this.parseDateFromFrontmatter(cachedEndRaw);
+		}
+
+		if (!start) {
+			const startValue = entry.getValue(startProp);
+			start = this.parseDateValueCached(startValue, dateCache);
+		}
+
+		if (cachedEndRaw == null || (hasEndValue && !end)) {
+			const endValue = entry.getValue(endProp);
+			hasEndValue = Boolean(endValue && endValue.isTruthy());
+			end = this.parseDateValueCached(endValue, dateCache);
+		}
 
 		if (!start) return null;
-
-		const hasEndValue = Boolean(endValue && endValue.isTruthy());
 		if (hasEndValue && !end) {
 			// End date exists but is invalid/unparseable: do not force point rendering.
 			return null;
