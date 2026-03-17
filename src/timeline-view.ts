@@ -39,23 +39,10 @@ interface EntryRenderMeta {
 	color: string | null;
 }
 
-interface RowLayoutItem {
-	type: 'group' | 'row';
-	top: number;
-	height: number;
-	entry?: BasesEntry;
-	groupLabel?: string;
-	isEven?: boolean;
-}
-
 const LABEL_COLUMN_WIDTH_PX = 175;
 const LABEL_COLUMN_MIN_PX = 80;
 const LABEL_COLUMN_MAX_PX = 500;
 const PROPERTY_SCAN_ENTRY_LIMIT = 2000;
-const VIRTUALIZATION_ENTRY_THRESHOLD = 200;
-const VIRTUALIZATION_BUFFER_PX = 600;
-const DEFAULT_ROW_HEIGHT_PX = 26;
-const DEFAULT_GROUP_HEIGHT_PX = 32;
 
 const HUE_VARS = ['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'purple', 'pink'];
 
@@ -438,24 +425,8 @@ export class TimelineView extends BasesView {
 		}
 
 		this.attachRowClickHandler(canvasEl);
-		const totalEntries = entries.length;
-		if (totalEntries > VIRTUALIZATION_ENTRY_THRESHOLD) {
-			const rowsContainerEl = canvasEl.createDiv({ cls: 'bases-timeline-rows' });
-			const { rowHeight, groupHeight } = this.measureRowHeights(rowsContainerEl);
-			const layout = this.buildRowLayout(groups, rowHeight, groupHeight);
-			this.renderRowsVirtualized(
-				scrollerEl,
-				rowsContainerEl,
-				layout,
-				config,
-				timelineRange.min,
-				timelineRange.max,
-				entryMeta,
-			);
-		} else {
-			for (const group of groups) {
-				this.renderGroup(canvasEl, group, config, timelineRange.min, timelineRange.max, entryMeta);
-			}
+		for (const group of groups) {
+			this.renderGroup(canvasEl, group, config, timelineRange.min, timelineRange.max, entryMeta);
 		}
 	}
 
@@ -1090,146 +1061,6 @@ export class TimelineView extends BasesView {
 		return group.key && !Value.equals(group.key, NullValue.value)
 			? group.key.toString()
 			: 'Ungrouped';
-	}
-
-	private measureRowHeights(containerEl: HTMLElement): { rowHeight: number; groupHeight: number } {
-		const measureEl = containerEl.createDiv({ cls: 'bases-timeline-measure' });
-		measureEl.style.position = 'absolute';
-		measureEl.style.visibility = 'hidden';
-		measureEl.style.pointerEvents = 'none';
-
-		const rowEl = measureEl.createDiv({ cls: 'bases-timeline-row' });
-		rowEl.createDiv({ cls: 'bases-timeline-label' });
-		rowEl.createDiv({ cls: 'bases-timeline-track' });
-		const rowHeight = rowEl.offsetHeight || DEFAULT_ROW_HEIGHT_PX;
-
-		const groupEl = measureEl.createDiv({ cls: 'bases-timeline-group', text: 'Group' });
-		const groupStyles = window.getComputedStyle(groupEl);
-		const groupMarginTop = parseFloat(groupStyles.marginTop || '0');
-		const groupMarginBottom = parseFloat(groupStyles.marginBottom || '0');
-		const groupHeight = (groupEl.offsetHeight || DEFAULT_GROUP_HEIGHT_PX) + groupMarginTop + groupMarginBottom;
-
-		measureEl.remove();
-
-		return {
-			rowHeight,
-			groupHeight: Math.max(groupHeight, DEFAULT_GROUP_HEIGHT_PX),
-		};
-	}
-
-	private buildRowLayout(
-		groups: BasesEntryGroup[],
-		rowHeight: number,
-		groupHeight: number,
-	): { items: RowLayoutItem[]; totalHeight: number } {
-		const items: RowLayoutItem[] = [];
-		let top = 0;
-		const isGrouped = this.data.groupedData.length > 1 || groups.some(group => group.hasKey());
-
-		for (const group of groups) {
-			if (isGrouped) {
-				const groupLabel = this.getGroupLabel(group);
-				items.push({ type: 'group', top, height: groupHeight, groupLabel });
-				top += groupHeight;
-			}
-
-			group.entries.forEach((entry, index) => {
-				items.push({
-					type: 'row',
-					top,
-					height: rowHeight,
-					entry,
-					isEven: index % 2 === 0,
-				});
-				top += rowHeight;
-			});
-		}
-
-		return { items, totalHeight: top };
-	}
-
-	private renderRowsVirtualized(
-		scrollerEl: HTMLElement,
-		rowsContainerEl: HTMLElement,
-		layout: { items: RowLayoutItem[]; totalHeight: number },
-		config: TimelineConfig,
-		min: Date,
-		max: Date,
-		entryMeta: Map<BasesEntry, EntryRenderMeta>,
-	): void {
-		rowsContainerEl.style.position = 'relative';
-		rowsContainerEl.style.height = `${layout.totalHeight}px`;
-
-		let lastStart = -1;
-		let lastEnd = -1;
-		let rafId = 0;
-
-		const items = layout.items;
-		if (items.length === 0) return;
-
-		const findIndexForOffset = (offset: number): number => {
-			let low = 0;
-			let high = items.length - 1;
-			while (low <= high) {
-				const mid = (low + high) >> 1;
-				const item = items[mid];
-				if (item.top + item.height < offset) {
-					low = mid + 1;
-				} else if (item.top > offset) {
-					high = mid - 1;
-				} else {
-					return mid;
-				}
-			}
-			return Math.max(0, Math.min(items.length - 1, low));
-		};
-
-		const renderWindow = () => {
-			const viewportHeight = scrollerEl.clientHeight;
-			const scrollTop = scrollerEl.scrollTop;
-			const rowsOffsetTop = rowsContainerEl.offsetTop;
-			const viewTop = Math.max(0, scrollTop - rowsOffsetTop - VIRTUALIZATION_BUFFER_PX);
-			const viewBottom = Math.min(layout.totalHeight, scrollTop + viewportHeight - rowsOffsetTop + VIRTUALIZATION_BUFFER_PX);
-
-			const startIndex = findIndexForOffset(viewTop);
-			const endIndex = Math.min(items.length - 1, findIndexForOffset(viewBottom) + 1);
-
-			if (startIndex === lastStart && endIndex === lastEnd) return;
-			lastStart = startIndex;
-			lastEnd = endIndex;
-
-			rowsContainerEl.empty();
-			for (let i = startIndex; i <= endIndex; i++) {
-				const item = items[i];
-				if (item.type === 'group') {
-					const groupEl = rowsContainerEl.createDiv({ cls: 'bases-timeline-group', text: item.groupLabel ?? '' });
-					groupEl.style.position = 'absolute';
-					groupEl.style.left = '0';
-					groupEl.style.right = '0';
-					groupEl.style.top = `${item.top}px`;
-					continue;
-				}
-
-				if (!item.entry) continue;
-				const rowEl = rowsContainerEl.createDiv({ cls: 'bases-timeline-row' });
-				rowEl.style.position = 'absolute';
-				rowEl.style.left = '0';
-				rowEl.style.right = '0';
-				rowEl.style.top = `${item.top}px`;
-				this.populateRow(rowEl, item.entry, config, min, max, item.isEven ?? false, entryMeta);
-			}
-		};
-
-		const requestRender = () => {
-			if (rafId) return;
-			rafId = requestAnimationFrame(() => {
-				rafId = 0;
-				renderWindow();
-			});
-		};
-
-		scrollerEl.addEventListener('scroll', requestRender);
-		requestRender();
 	}
 
 	private attachRowClickHandler(containerEl: HTMLElement): void {
