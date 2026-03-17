@@ -1223,6 +1223,13 @@ export class TimelineView extends BasesView {
 		const label = this.getEntryLabel(entry, config.labelProp);
 		const labelEl = rowEl.createDiv({ cls: 'bases-timeline-label' });
 		labelEl.createEl('span', { text: label });
+		labelEl.addEventListener('mouseover', (e: MouseEvent) => {
+			this.app.workspace.trigger('hover-link', {
+				event: e, source: 'timeline-for-bases',
+				hoverParent: labelEl, targetEl: labelEl,
+				linktext: entry.file.path,
+			});
+		});
 
 		const trackEl = rowEl.createDiv({ cls: 'bases-timeline-track' });
 
@@ -1270,6 +1277,15 @@ export class TimelineView extends BasesView {
 		}
 
 		barEl.setAttribute('title', `${label} (${dates.start.toLocaleDateString()} → ${dates.end.toLocaleDateString()})`);
+		barEl.addEventListener('mouseover', (e: MouseEvent) => {
+			// Don't trigger during drag
+			if (this._dragState) return;
+			this.app.workspace.trigger('hover-link', {
+				event: e, source: 'timeline-for-bases',
+				hoverParent: barEl, targetEl: barEl,
+				linktext: entry.file.path,
+			});
+		});
 
 		// Drag & resize — only when we know which frontmatter keys to write
 		const startPropKey = config.startDateProp ? String(config.startDateProp).replace(/^note\./, '') : null;
