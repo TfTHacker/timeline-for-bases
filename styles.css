@@ -181,6 +181,29 @@
 	font-size: var(--font-ui-small);
 }
 
+/* Pencil edit button on label hover */
+.bases-timeline-label-edit-btn {
+	display: none;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	width: 18px;
+	height: 18px;
+	border: none;
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	border-radius: 3px;
+	padding: 0;
+	margin-left: 4px;
+}
+.bases-timeline-label-edit-btn svg { width: 11px; height: 11px; }
+.bases-timeline-label-edit-btn:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.bases-timeline-row:hover .bases-timeline-label-edit-btn,
+.bases-timeline-row.is-active-hover .bases-timeline-label-edit-btn {
+	display: inline-flex;
+}
+
 /* Inline label edit input */
 .bases-timeline-label-input {
 	width: 100%;

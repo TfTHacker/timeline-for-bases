@@ -1268,21 +1268,28 @@ export class TimelineView extends BasesView {
 			});
 		});
 
-		// Inline edit: double-click on label text → editable input
+		// Inline edit: pencil icon appears on hover → click to edit
 		const labelPropKey = config.labelProp ? String(config.labelProp).replace(/^note\./, '') : null;
 		if (labelPropKey) {
-			labelSpan.addEventListener('dblclick', (e: MouseEvent) => {
+			const editBtn = labelEl.createEl('button', { cls: 'bases-timeline-label-edit-btn' });
+			setIcon(editBtn, 'pencil');
+			editBtn.setAttribute('aria-label', 'Edit name');
+
+			editBtn.addEventListener('click', (e: MouseEvent) => {
 				e.stopPropagation(); e.preventDefault();
+				editBtn.hide();
 				const input = document.createElement('input');
 				input.type = 'text';
 				input.value = labelSpan.textContent || '';
 				input.className = 'bases-timeline-label-input';
-				labelEl.replaceChild(input, labelSpan);
+				labelEl.replaceChild(labelSpan, labelSpan); // ensure span is there
+				labelSpan.replaceWith(input);
 				input.focus(); input.select();
 
 				const save = async () => {
 					const newVal = input.value.trim();
-					labelEl.replaceChild(labelSpan, input);
+					input.replaceWith(labelSpan);
+					editBtn.show();
 					if (newVal && newVal !== label) {
 						labelSpan.textContent = newVal;
 						const file = this.app.vault.getFileByPath(entry.file.path);
