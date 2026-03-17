@@ -408,9 +408,6 @@ export class TimelineView extends BasesView {
 
 		this.renderTimeAxis(canvasEl, min, max, config, ticks);
 		this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.labelColWidth);
-		if (config.timeScale === 'day') {
-			this.renderTodayMarker(canvasEl, min, max, false, config.labelColWidth);
-		}
 		this.attachRowClickHandler(canvasEl);
 
 		for (const group of groups) {
@@ -678,21 +675,31 @@ export class TimelineView extends BasesView {
 	private renderDayLabels(labelsEl: HTMLElement, dayTicks: Date[], min: Date, max: Date, weekStart: 'monday' | 'sunday'): void {
 		labelsEl.addClass('is-day-scale');
 		const total = max.getTime() - min.getTime();
-		const weekdayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short' });
+		const oneDayMs = 1000 * 60 * 60 * 24;
 
 		for (let i = 0; i < dayTicks.length; i++) {
 			const date = dayTicks[i];
-			const offset = date.getTime() - min.getTime();
-			const ratio = total === 0 ? 0 : offset / total;
-			if (ratio < -0.01 || ratio > 1.01) continue;
+			const startMs = Math.max(min.getTime(), date.getTime());
+			const nextTick = dayTicks[i + 1];
+			const endMs = Math.min(max.getTime(), nextTick ? nextTick.getTime() : date.getTime() + oneDayMs);
+			if (endMs <= startMs) continue;
 
-			const weekday = weekdayFmt.format(date).slice(0, 2);
+			const leftRatio = total === 0 ? 0 : (startMs - min.getTime()) / total;
+			const widthRatio = total === 0 ? 1 : (endMs - startMs) / total;
+			if (leftRatio < -0.01 || leftRatio > 1.01) continue;
+
+			const weekday = this.getCompactWeekdayLabel(date, weekStart);
 			const dayEl = labelsEl.createDiv({ cls: 'bases-timeline-axis-label is-day-label', text: `${weekday} ${date.getDate()}` });
-			dayEl.style.left = `${ratio * 100}%`;
-			if (ratio < 0.03) dayEl.style.transform = 'translateX(0)';
-			else if (ratio > 0.97) dayEl.style.transform = 'translateX(-100%)';
-			else dayEl.style.transform = 'translateX(-50%)';
+			dayEl.style.left = `${leftRatio * 100}%`;
+			dayEl.style.width = `${Math.max(0, widthRatio * 100)}%`;
 		}
+	}
+
+	private getCompactWeekdayLabel(date: Date, weekStart: 'monday' | 'sunday'): string {
+		const mondayLabels = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+		const sundayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+		const labels = weekStart === 'sunday' ? sundayLabels : mondayLabels;
+		return labels[date.getDay()] ?? new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(date).slice(0, 2);
 	}
 
 	private attachResizeHandle(labelEl: HTMLElement, config: TimelineConfig): void {
@@ -984,6 +991,23 @@ export class TimelineView extends BasesView {
 		labelEl.createEl('span', { text: label });
 
 		const trackEl = rowEl.createDiv({ cls: 'bases-timeline-track' });
+
+		// Render per-row grid lines (keeps grid visible through alternating row backgrounds)
+		if (ticks && ticks.length > 0) {
+			this.renderTrackGridLines(trackEl, ticks, min, max, config.timeScale, config.weekStart);
+		}
+
+		if (config.timeScale === 'day') {
+			const today = new Date();
+			today.setHours(0, 0, 0, 0);
+			if (today >= min && today <= max) {
+				const total2 = max.getTime() - min.getTime();
+				const leftToday = total2 === 0 ? 0 : ((today.getTime() - min.getTime()) / total2) * 100;
+				const todayLine = trackEl.createDiv({ cls: 'bases-timeline-today-marker' });
+				todayLine.style.left = `${leftToday}%`;
+				todayLine.setAttribute('title', `Today: ${today.toLocaleDateString()}`);
+			}
+		}
 
 		const dates = entryDatesCache.get(entry) ?? null;
 		if (!dates) {
