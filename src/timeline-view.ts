@@ -1080,7 +1080,10 @@ export class TimelineView extends BasesView {
 			barEl.style.backgroundColor = color;
 		}
 
-		barEl.setAttribute('title', `${label} (${dates.start.toLocaleDateString()} → ${dates.end.toLocaleDateString()})`);
+		const debugTitle = `${label}\n${entry.file.path}\nstart=${dates.start.toISOString().slice(0, 10)} end=${dates.end.toISOString().slice(0, 10)} point=${dates.isPoint ? 'yes' : 'no'}`;
+		barEl.setAttribute('title', debugTitle);
+		labelEl.setAttribute('title', debugTitle);
+		rowEl.setAttribute('title', debugTitle);
 	}
 
 	private getGroupLabel(group: BasesEntryGroup): string {
