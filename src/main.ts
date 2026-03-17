@@ -109,16 +109,5 @@ class TimelineSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
-			.setName('Default density')
-			.setDesc('Comfortable or compact row spacing.')
-			.addDropdown(dropdown => dropdown
-				.addOption('comfortable', 'Comfortable')
-				.addOption('compact', 'Compact')
-				.setValue(this.plugin.settings.defaultDensity)
-				.onChange(async (value: 'comfortable' | 'compact') => {
-					this.plugin.settings.defaultDensity = value;
-					await this.plugin.saveSettings();
-				}));
 	}
 }
