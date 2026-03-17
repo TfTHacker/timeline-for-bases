@@ -1180,16 +1180,23 @@ export class TimelineView extends BasesView {
 		}
 
 		const total = max.getTime() - min.getTime();
-		// Snap start/end to local midnight so bar edges align with day-scale tick positions.
-		// Date.parse("YYYY-MM-DD") gives UTC midnight; ticks use setHours(0,0,0,0) = local midnight.
-		// Without snapping, the bar is offset by UTC offset (e.g. +1h in UTC+1), bleeding into the next column.
-		const snapToLocalDay = (d: Date): Date => { const r = new Date(d); r.setHours(0, 0, 0, 0); return r; };
-		const localStart = snapToLocalDay(dates.start);
-		const localEnd = snapToLocalDay(dates.end);
-		const oneDayMs = 1000 * 60 * 60 * 24;
-		const startOffset = localStart.getTime() - min.getTime();
-		const duration = Math.max(0, localEnd.getTime() - localStart.getTime());
-		const effectiveDuration = dates.isPoint ? 0 : duration + oneDayMs;
+
+		// Compute bar geometry using tick positions directly.
+		// This avoids UTC-vs-local drift: ticks are local-midnight dates (setHours(0,0,0,0)),
+		// while Date.parse("YYYY-MM-DD") gives UTC midnight. Using ticks as anchors ensures
+		// the bar left/right edges align exactly with the column boundaries drawn by renderDayLabels.
+		const toLocalMidnight = (d: Date): number => {
+			const r = new Date(d); r.setHours(0, 0, 0, 0); return r.getTime();
+		};
+		const startMs = toLocalMidnight(dates.start);
+		// End is exclusive: the bar fills up to (but not including) the day AFTER end.
+		const localEnd = new Date(dates.end);
+		localEnd.setHours(0, 0, 0, 0);
+		localEnd.setDate(localEnd.getDate() + 1);  // calendar day after end (DST-safe)
+		const endMs = localEnd.getTime();
+
+		const startOffset = startMs - min.getTime();
+		const effectiveDuration = dates.isPoint ? 0 : Math.max(0, endMs - startMs);
 
 		const left = total === 0 ? 0 : (startOffset / total) * 100;
 		const width = total === 0 ? 100 : Math.max((effectiveDuration / total) * 100, 0.5);
