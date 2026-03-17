@@ -1167,6 +1167,11 @@ export class TimelineView extends BasesView {
 		entries: BasesEntry[],
 		config: TimelineConfig,
 	): { entryMeta: Map<BasesEntry, EntryRenderMeta>; timelineRange: { min: Date; max: Date } | null } {
+		// Use the proven original range computation (entry.getValue path), not the cached path,
+		// so bar positioning is always correct regardless of metadata cache state.
+		const timelineRange = this.getTimelineRange(entries, config.startDateProp, config.endDateProp, config);
+
+		// Build label/color cache independently for render-pass speed.
 		const entryMeta = new Map<BasesEntry, EntryRenderMeta>();
 		const dateCache = new Map<Value, Date | null>();
 		const startProp = config.startDateProp;
@@ -1174,37 +1179,14 @@ export class TimelineView extends BasesView {
 		const labelProp = config.labelProp;
 		const colorProp = config.colorProp;
 
-		let min: Date | null = null;
-		let max: Date | null = null;
-
 		for (const entry of entries) {
 			const label = this.getEntryLabel(entry, labelProp);
 			const dates = this.getEntryDatesCached(entry, startProp, endProp, dateCache);
 			const color = this.getEntryColor(entry, colorProp, config.colorMap);
 			entryMeta.set(entry, { label, dates, color });
-
-			if (dates) {
-				if (!min || dates.start < min) min = dates.start;
-				if (!max || dates.end > max) max = dates.end;
-			}
 		}
 
-		if (!min || !max) return { entryMeta, timelineRange: null };
-
-		min = this.snapStartToScale(min, config.timeScale, config.weekStart);
-		max = this.snapEndToScale(max, config.timeScale, config.weekStart);
-
-		// Padding so bars/labels don't sit flush at edges
-		const weekMs = 7 * 24 * 60 * 60 * 1000;
-		if (config.timeScale === 'week') {
-			// One week before and after for week scale
-			min = new Date(min.getTime() - weekMs);
-			max = new Date(max.getTime() + weekMs);
-		} else if (config.timeScale !== 'day') {
-			max = new Date(max.getTime() + weekMs);
-		}
-
-		return { entryMeta, timelineRange: { min, max } };
+		return { entryMeta, timelineRange };
 	}
 
 	private getEntryDatesCached(
@@ -1268,6 +1250,34 @@ export class TimelineView extends BasesView {
 		if (scale === 'quarter') return 1;
 		if (scale === 'year') return 0.9;
 		return 1;
+	}
+
+	private getTimelineRange(entries: BasesEntry[], startProp: BasesPropertyId | null, endProp: BasesPropertyId | null, config: TimelineConfig): { min: Date; max: Date } | null {
+		if (!startProp || !endProp) return null;
+		let min: Date | null = null;
+		let max: Date | null = null;
+
+		for (const entry of entries) {
+			const dates = this.getEntryDates(entry, startProp, endProp);
+			if (!dates) continue;
+			if (!min || dates.start < min) min = dates.start;
+			if (!max || dates.end > max) max = dates.end;
+		}
+
+		if (!min || !max) return null;
+
+		min = this.snapStartToScale(min, config.timeScale, config.weekStart);
+		max = this.snapEndToScale(max, config.timeScale, config.weekStart);
+
+		const weekMs = 7 * 24 * 60 * 60 * 1000;
+		if (config.timeScale === 'week') {
+			min = new Date(min.getTime() - weekMs);
+			max = new Date(max.getTime() + weekMs);
+		} else if (config.timeScale !== 'day') {
+			max = new Date(max.getTime() + weekMs);
+		}
+
+		return { min, max };
 	}
 
 	private snapStartToScale(date: Date, scale: string, weekStart: 'monday' | 'sunday' = 'monday'): Date {
