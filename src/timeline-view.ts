@@ -605,8 +605,8 @@ export class TimelineView extends BasesView {
 			return;
 		}
 
-		// Quarter and year scales: render span-style labels (each tick fills its slot width)
-		if (config.timeScale === 'quarter' || config.timeScale === 'year') {
+		// Month, quarter, year scales: render span-style labels (each tick fills its slot width)
+		if (config.timeScale === 'month' || config.timeScale === 'quarter' || config.timeScale === 'year') {
 			this.renderSpanLabels(labelsEl, resolvedTicks, min, max, config.timeScale);
 			return;
 		}
@@ -647,12 +647,20 @@ export class TimelineView extends BasesView {
 		labelsEl.addClass(`is-${scale}-scale`);
 		const total = max.getTime() - min.getTime();
 
+		const monthFmt = scale === 'month'
+			? new Intl.DateTimeFormat(undefined, { month: 'short' })
+			: null;
+
 		for (let i = 0; i < ticks.length; i++) {
 			const date = ticks[i];
 			const startMs = Math.max(min.getTime(), date.getTime());
 			const nextTick = ticks[i + 1];
 			let slotEnd: number;
-			if (scale === 'quarter') {
+			if (scale === 'month') {
+				const nextMonth = new Date(date);
+				nextMonth.setMonth(nextMonth.getMonth() + 1, 1);
+				slotEnd = nextTick ? nextTick.getTime() : nextMonth.getTime();
+			} else if (scale === 'quarter') {
 				const nextQ = new Date(date);
 				nextQ.setMonth(nextQ.getMonth() + 3, 1);
 				slotEnd = nextTick ? nextTick.getTime() : nextQ.getTime();
@@ -670,7 +678,9 @@ export class TimelineView extends BasesView {
 			if (leftRatio > 1.01) continue;
 
 			let label: string;
-			if (scale === 'quarter') {
+			if (scale === 'month') {
+				label = monthFmt!.format(date);
+			} else if (scale === 'quarter') {
 				const q = Math.floor(date.getMonth() / 3) + 1;
 				label = `Q${q}`;
 			} else {
@@ -713,8 +723,8 @@ export class TimelineView extends BasesView {
 
 				current.setMonth(current.getMonth() + 1, 1);
 			}
-		} else if (scale === 'month' || scale === 'quarter') {
-			// Show quarter spans (Q1/Q2/Q3/Q4) as context for both month and quarter views
+		} else if (scale === 'month') {
+			// Month view context: show quarter spans (Q1/Q2/Q3/Q4 YYYY) for orientation
 			let current = new Date(min);
 			const qStartMonth = Math.floor(current.getMonth() / 3) * 3;
 			current.setMonth(qStartMonth, 1);
@@ -738,6 +748,30 @@ export class TimelineView extends BasesView {
 				}
 
 				current.setMonth(current.getMonth() + 3, 1);
+			}
+		} else if (scale === 'quarter') {
+			// Quarter view context: show year spans (provides the broader time context)
+			let current = new Date(min);
+			current.setMonth(0, 1);
+			current.setHours(0, 0, 0, 0);
+
+			while (current <= max) {
+				const nextYear = new Date(current);
+				nextYear.setFullYear(nextYear.getFullYear() + 1, 0, 1);
+
+				const offset = Math.max(0, current.getTime() - min.getTime());
+				const endOffset = Math.min(total, nextYear.getTime() - min.getTime());
+				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
+				const left = total === 0 ? 0 : (offset / total) * 100;
+
+				if (width > 0 && left < 100) {
+					const label = current.getFullYear().toString();
+					const yearEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
+					yearEl.style.left = `${left}%`;
+					yearEl.style.width = `${width}%`;
+				}
+
+				current.setFullYear(current.getFullYear() + 1);
 			}
 		} else if (scale === 'year') {
 			// Show each individual year as a labeled span
