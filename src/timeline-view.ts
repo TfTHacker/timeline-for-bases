@@ -1273,27 +1273,24 @@ export class TimelineView extends BasesView {
 		const endPropKey   = config.endDateProp   ? String(config.endDateProp).replace(/^note\./, '')   : null;
 
 		if (startPropKey && endPropKey && !dates.isPoint) {
-			// Resize handle — left edge
-			const handleL = barEl.createDiv({ cls: 'bases-timeline-bar-handle is-start' });
-			handleL.addEventListener('mousedown', e => {
-				e.stopPropagation(); e.preventDefault();
-				this._startDrag('resize-start', barEl, entry.file.path, startPropKey, endPropKey,
-					dates!.start, dates!.end, e.clientX, min, total);
-			});
+			// Visual-only resize handles (no event listeners — cursor comes from CSS)
+			barEl.createDiv({ cls: 'bases-timeline-bar-handle is-start' });
+			barEl.createDiv({ cls: 'bases-timeline-bar-handle is-end' });
 
-			// Resize handle — right edge
-			const handleR = barEl.createDiv({ cls: 'bases-timeline-bar-handle is-end' });
-			handleR.addEventListener('mousedown', e => {
-				e.stopPropagation(); e.preventDefault();
-				this._startDrag('resize-end', barEl, entry.file.path, startPropKey, endPropKey,
-					dates!.start, dates!.end, e.clientX, min, total);
-			});
-
-			// Bar body — drag to move
+			// Single mousedown on the bar — detect drag type from click position
 			barEl.addEventListener('mousedown', e => {
-				if ((e.target as HTMLElement).classList.contains('bases-timeline-bar-handle')) return;
 				e.preventDefault();
-				this._startDrag('move', barEl, entry.file.path, startPropKey, endPropKey,
+				const barWidth = barEl.offsetWidth || 1;
+				const EDGE = Math.min(10, barWidth * 0.3); // edge threshold px
+				let type: DragState['type'];
+				if (e.offsetX <= EDGE) {
+					type = 'resize-start';
+				} else if (e.offsetX >= barWidth - EDGE) {
+					type = 'resize-end';
+				} else {
+					type = 'move';
+				}
+				this._startDrag(type, barEl, entry.file.path, startPropKey, endPropKey,
 					dates!.start, dates!.end, e.clientX, min, total);
 			});
 		}
@@ -1352,41 +1349,40 @@ export class TimelineView extends BasesView {
 		const deltaPx = e.clientX - s.mouseStartX;
 		const deltaDays = Math.round((deltaPx / s.trackWidth) * (s.totalMs / 86400000));
 		const dayMs = 86400000;
+		const minWidthDays = 1; // bar never narrower than 1 day
 
 		let newStart: Date, newEnd: Date;
 
 		if (s.type === 'move') {
 			newStart = this._localMidnight(new Date(s.origStart.getTime() + deltaDays * dayMs));
 			newEnd   = this._localMidnight(new Date(s.origEnd.getTime()   + deltaDays * dayMs));
-			// bar left% based on newStart
-			const newLeftMs  = newStart.getTime() - s.rangeMin.getTime();
-			s.barEl.style.left = `${(newLeftMs / s.totalMs) * 100}%`;
+			const leftPct = ((newStart.getTime() - s.rangeMin.getTime()) / s.totalMs) * 100;
+			s.barEl.style.left = `${leftPct}%`;
+			// width unchanged (duration preserved)
 
 		} else if (s.type === 'resize-end') {
 			newStart = new Date(s.origStart);
 			const rawEnd = this._localMidnight(new Date(s.origEnd.getTime() + deltaDays * dayMs));
-			// end must be >= start
-			newEnd = rawEnd < s.origStart ? new Date(s.origStart) : rawEnd;
+			// end >= start + 1 day minimum
+			const minEnd = new Date(s.origStart.getTime() + (minWidthDays - 1) * dayMs);
+			newEnd = rawEnd < minEnd ? minEnd : rawEnd;
 			const excl = new Date(newEnd); excl.setDate(excl.getDate() + 1);
-			const widthMs = excl.getTime() - newStart.getTime();
-			const widthPct = Math.max(0.5, (widthMs / s.totalMs) * 100);
-			// keep left where it is
-			const left = parseFloat(s.barEl.style.left) || 0;
-			s.barEl.style.left = `${Math.min(left, 100 - widthPct)}%`;
-			s.barEl.style.width = `${Math.min(widthPct, 100 - parseFloat(s.barEl.style.left))}%`;
+			const widthMs = Math.max(minWidthDays * dayMs, excl.getTime() - newStart.getTime());
+			s.barEl.style.width = `${(widthMs / s.totalMs) * 100}%`;
+			// left unchanged
 
 		} else { // resize-start
 			const rawStart = this._localMidnight(new Date(s.origStart.getTime() + deltaDays * dayMs));
-			// start must be <= end
-			newStart = rawStart > s.origEnd ? new Date(s.origEnd) : rawStart;
+			// start <= end - 1 day minimum
+			const maxStart = new Date(s.origEnd.getTime() - (minWidthDays - 1) * dayMs);
+			newStart = rawStart > maxStart ? maxStart : rawStart;
 			newEnd = new Date(s.origEnd);
-			const newLeftMs = newStart.getTime() - s.rangeMin.getTime();
+			const leftPct = ((newStart.getTime() - s.rangeMin.getTime()) / s.totalMs) * 100;
 			const excl = new Date(newEnd); excl.setDate(excl.getDate() + 1);
-			const widthMs = excl.getTime() - newStart.getTime();
-			const leftPct = (newLeftMs / s.totalMs) * 100;
-			const widthPct = Math.max(0.5, (widthMs / s.totalMs) * 100);
-			s.barEl.style.left  = `${Math.max(0, Math.min(leftPct, 100 - widthPct))}%`;
-			s.barEl.style.width = `${Math.min(widthPct, 100 - parseFloat(s.barEl.style.left))}%`;
+			const widthMs = Math.max(minWidthDays * dayMs, excl.getTime() - newStart.getTime());
+			s.barEl.style.left  = `${leftPct}%`;
+			s.barEl.style.width = `${(widthMs / s.totalMs) * 100}%`;
+			// right edge stays fixed
 		}
 
 		this._refreshTooltip(newStart, newEnd);
