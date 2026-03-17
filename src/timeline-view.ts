@@ -8,9 +8,11 @@ import {
 	BasesViewConfig,
 	DateValue,
 	NullValue,
+	Notice,
 	QueryController,
 	Value,
 	debounce,
+	normalizePath,
 	setIcon,
 } from 'obsidian';
 import type TimelinePlugin from './main';
@@ -73,7 +75,13 @@ export class TimelineView extends BasesView {
 	bodyEl: HTMLElement;
 	controlsEl: HTMLElement;
 	plugin: TimelinePlugin;
-	private _renderSeq = 0; // incremented on each render; async renders check this to self-cancel
+	private _renderSeq = 0;
+
+	// Stored after each render for Today/Jump scroll
+	private _scrollerEl: HTMLElement | null = null;
+	private _rangeMin: Date | null = null;
+	private _rangeMax: Date | null = null;
+	private _lastConfig: TimelineConfig | null = null;
 
 	private _dragState: DragState | null = null;
 	private _dragTooltipEl: HTMLElement | null = null;
@@ -237,8 +245,31 @@ export class TimelineView extends BasesView {
 
 
 
+		// Navigation buttons — Today & Jump to date
+		const navEl = leftEl.createDiv({ cls: 'bases-timeline-nav-buttons' });
+
+		const todayBtn = navEl.createEl('button', { cls: 'bases-timeline-nav-btn', text: 'Today' });
+		setIcon(todayBtn.createSpan({ cls: 'nav-icon' }), 'locate');
+		todayBtn.addEventListener('click', () => this._scrollToDate(new Date()));
+
+		const jumpBtn = navEl.createEl('button', { cls: 'bases-timeline-nav-btn', text: 'Go to…' });
+		setIcon(jumpBtn.createSpan({ cls: 'nav-icon' }), 'calendar');
+		jumpBtn.addEventListener('click', (e) => this._showJumpToDate(jumpBtn, e));
+
 		// Right side: config toggle
 		const rightEl = this.headerEl.createDiv({ cls: 'bases-timeline-header-right' });
+
+		// Add task button
+		const addBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn' });
+		setIcon(addBtn.createSpan({ cls: 'nav-icon' }), 'plus');
+		addBtn.createSpan({ text: 'Add task' });
+		addBtn.addEventListener('click', () => this._addTask(config));
+
+		// Export PNG button
+		const exportBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn' });
+		setIcon(exportBtn.createSpan({ cls: 'nav-icon' }), 'image');
+		exportBtn.createSpan({ text: 'Export PNG' });
+		exportBtn.addEventListener('click', () => this._exportPng());
 		const toggle = rightEl.createEl('button', { cls: 'bases-timeline-controls-toggle' });
 		setIcon(toggle, 'settings');
 		toggle.createSpan({ cls: 'bases-timeline-controls-toggle-label', text: 'Config' });
@@ -395,6 +426,8 @@ export class TimelineView extends BasesView {
 		const hasFixedWindow = typeof rangeStartMs === 'number' && rangeStartMs > 0
 			&& typeof rangePresetDays === 'number' && rangePresetDays > 0;
 
+		this._lastConfig = config;
+
 		if (hasFixedWindow) {
 			// Fixed window: canvas can be set up immediately (min/max known from config).
 			// All entry processing + row rendering is deferred async to keep the UI responsive.
@@ -402,9 +435,11 @@ export class TimelineView extends BasesView {
 			min.setHours(0, 0, 0, 0);
 			const max = new Date(min.getTime() + (rangePresetDays as number) * 24 * 60 * 60 * 1000);
 			max.setHours(23, 59, 59, 999);
+			this._rangeMin = min; this._rangeMax = max;
 
 			// Render canvas structure synchronously — visible immediately
 			const scrollerEl = this.bodyEl.createDiv({ cls: 'bases-timeline-scroller' });
+			this._scrollerEl = scrollerEl;
 			const canvasEl = scrollerEl.createDiv({ cls: 'bases-timeline-canvas' });
 			const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
 			const zoom = Math.max(config.zoom, 1);
@@ -498,7 +533,9 @@ export class TimelineView extends BasesView {
 				max = new Date(max.getTime() + weekMs);
 			}
 
+			this._rangeMin = min; this._rangeMax = max;
 			const scrollerEl = this.bodyEl.createDiv({ cls: 'bases-timeline-scroller' });
+			this._scrollerEl = scrollerEl;
 			const canvasEl = scrollerEl.createDiv({ cls: 'bases-timeline-canvas' });
 			const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
 			const zoom = Math.max(config.zoom, 1);
@@ -1222,7 +1259,7 @@ export class TimelineView extends BasesView {
 
 		const label = this.getEntryLabel(entry, config.labelProp);
 		const labelEl = rowEl.createDiv({ cls: 'bases-timeline-label' });
-		labelEl.createEl('span', { text: label });
+		const labelSpan = labelEl.createEl('span', { text: label });
 		labelEl.addEventListener('mouseover', (e: MouseEvent) => {
 			this.app.workspace.trigger('hover-link', {
 				event: e, source: 'timeline-for-bases',
@@ -1230,6 +1267,37 @@ export class TimelineView extends BasesView {
 				linktext: entry.file.path,
 			});
 		});
+
+		// Inline edit: double-click on label text → editable input
+		const labelPropKey = config.labelProp ? String(config.labelProp).replace(/^note\./, '') : null;
+		if (labelPropKey) {
+			labelSpan.addEventListener('dblclick', (e: MouseEvent) => {
+				e.stopPropagation(); e.preventDefault();
+				const input = document.createElement('input');
+				input.type = 'text';
+				input.value = labelSpan.textContent || '';
+				input.className = 'bases-timeline-label-input';
+				labelEl.replaceChild(input, labelSpan);
+				input.focus(); input.select();
+
+				const save = async () => {
+					const newVal = input.value.trim();
+					labelEl.replaceChild(labelSpan, input);
+					if (newVal && newVal !== label) {
+						labelSpan.textContent = newVal;
+						const file = this.app.vault.getFileByPath(entry.file.path);
+						if (file) {
+							await this.app.fileManager.processFrontMatter(file, fm => { fm[labelPropKey] = newVal; });
+						}
+					}
+				};
+				input.addEventListener('blur', save);
+				input.addEventListener('keydown', (ke: KeyboardEvent) => {
+					if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
+					if (ke.key === 'Escape') { input.value = label; input.blur(); }
+				});
+			});
+		}
 
 		const trackEl = rowEl.createDiv({ cls: 'bases-timeline-track' });
 
@@ -1316,6 +1384,112 @@ export class TimelineView extends BasesView {
 			});
 		}
 	}
+
+	// ─── Navigation ──────────────────────────────────────────────────────────
+
+	private _scrollToDate(date: Date): void {
+		const scroller = this._scrollerEl;
+		const min = this._rangeMin;
+		const max = this._rangeMax;
+		const config = this._lastConfig;
+		if (!scroller || !min || !max || !config) return;
+
+		const total = max.getTime() - min.getTime();
+		if (total === 0) return;
+
+		const target = new Date(date); target.setHours(0, 0, 0, 0);
+		const ratio = (target.getTime() - min.getTime()) / total;
+		const trackWidth = scroller.scrollWidth - config.labelColWidth;
+		const scrollLeft = config.labelColWidth + ratio * trackWidth - scroller.clientWidth / 2;
+		scroller.scrollTo({ left: Math.max(0, scrollLeft), behavior: 'smooth' });
+	}
+
+	private _showJumpToDate(anchor: HTMLElement, evt: MouseEvent): void {
+		// Create a small popover with a date input
+		const existing = document.getElementById('tl-jump-popover');
+		if (existing) { existing.remove(); return; }
+
+		const popover = document.body.createDiv({ attr: { id: 'tl-jump-popover' }, cls: 'bases-timeline-jump-popover' });
+		const rect = anchor.getBoundingClientRect();
+		popover.style.top  = `${rect.bottom + 6}px`;
+		popover.style.left = `${rect.left}px`;
+
+		const input = popover.createEl('input', { type: 'date' });
+		const today = new Date();
+		input.value = this._fmtDate(today);
+
+		const go = popover.createEl('button', { cls: 'mod-cta', text: 'Go' });
+		go.addEventListener('click', () => {
+			const d = new Date(input.value + 'T00:00:00');
+			if (!isNaN(d.getTime())) this._scrollToDate(d);
+			popover.remove();
+		});
+		input.addEventListener('keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Enter') go.click();
+			if (e.key === 'Escape') popover.remove();
+		});
+
+		// Close on outside click
+		const dismiss = (e: MouseEvent) => {
+			if (!popover.contains(e.target as Node)) { popover.remove(); document.removeEventListener('mousedown', dismiss); }
+		};
+		setTimeout(() => document.addEventListener('mousedown', dismiss), 0);
+		input.focus();
+	}
+
+	private async _addTask(config: TimelineConfig): Promise<void> {
+		const today = new Date();
+		const start = this._fmtDate(today);
+		const end   = this._fmtDate(today); // 1-day range (same day = 1 column)
+
+		// Determine target folder: use first entry's folder, fall back to vault root
+		const entries = (this.data.groupedData || []).flatMap((g: BasesEntryGroup) => g.entries);
+		const folder = entries.length > 0 ? (entries[0].file.parent?.path ?? '') : '';
+
+		// Find unique filename
+		let name = `New task ${start}`;
+		let path = folder ? `${folder}/${name}.md` : `${name}.md`;
+		let counter = 1;
+		while (await this.app.vault.adapter.exists(path)) {
+			name = `New task ${start} ${counter++}`;
+			path = folder ? `${folder}/${name}.md` : `${name}.md`;
+		}
+
+		// Build frontmatter from configured props
+		const startKey = config.startDateProp ? String(config.startDateProp).replace(/^note\./, '') : 'start';
+		const endKey   = config.endDateProp   ? String(config.endDateProp).replace(/^note\./, '')   : 'end';
+		const content  = `---\n${startKey}: ${start}\n${endKey}: ${end}\n---\n\n# ${name}\n`;
+
+		const file = await this.app.vault.create(path, content);
+		// Open for editing
+		await this.app.workspace.getLeaf(false).openFile(file);
+	}
+
+	private async _exportPng(): Promise<void> {
+		const el = this.bodyEl as HTMLElement;
+		try {
+			const html2canvas = (await import('html2canvas')).default;
+			const canvas = await html2canvas(el, {
+				backgroundColor: getComputedStyle(el).backgroundColor || '#fff',
+				scale: window.devicePixelRatio || 1,
+				useCORS: true,
+			});
+			const dataUrl = canvas.toDataURL('image/png');
+			const base64 = dataUrl.split(',')[1] || '';
+			const binary = atob(base64);
+			const bytes = new Uint8Array(binary.length);
+			for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+			const filePath = normalizePath(`Screenshots/timeline-${Date.now()}.png`);
+			await this.app.vault.adapter.mkdir('Screenshots').catch(() => {});
+			await this.app.vault.adapter.writeBinary(filePath, bytes.buffer as ArrayBuffer);
+			new Notice(`Saved: ${filePath}`);
+		} catch (err) {
+			console.error('[Timeline] Export failed:', err);
+			new Notice('Export failed — check console.');
+		}
+	}
+
+	// ─── End navigation ───────────────────────────────────────────────────────
 
 	// ─── Drag & resize ───────────────────────────────────────────────────────
 
