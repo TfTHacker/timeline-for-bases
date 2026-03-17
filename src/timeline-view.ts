@@ -59,6 +59,7 @@ export class TimelineView extends BasesView {
 	private _renderSeq = 0; // incremented on each render; async renders check this to self-cancel
 
 	private onResizeDebounce = debounce(() => this.render(), 100, true);
+	private onDataDebounce = debounce(() => this.render(), 300, false);
 
 	constructor(controller: QueryController, scrollEl: HTMLElement, plugin: TimelinePlugin) {
 		super(controller);
@@ -82,7 +83,7 @@ export class TimelineView extends BasesView {
 	}
 
 	onDataUpdated(): void {
-		this.render();
+		this.onDataDebounce();
 	}
 
 	static getViewOptions(_config: BasesViewConfig): BasesAllOptions[] {
@@ -398,7 +399,7 @@ export class TimelineView extends BasesView {
 			const endPropName = config.endDateProp && String(config.endDateProp).startsWith('note.')
 				? this.getPropertyName(config.endDateProp) : null;
 			const entryDatesCache = new Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>();
-			const CHUNK = 100;
+			const CHUNK = 50;
 
 			(async () => {
 				let rowIndex = 0;
