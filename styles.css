@@ -421,6 +421,13 @@
 	font-size: 0.72rem;
 	font-weight: 500;
 	color: var(--text-muted);
+	transform: none;
+	max-width: none;
+	padding: 0 2px;
+	box-sizing: border-box;
+	text-align: center;
+	overflow: hidden;
+	text-overflow: clip;
 }
 
 
@@ -436,7 +443,6 @@
 	text-overflow: ellipsis;
 	padding: 0 4px;
 }
-
 .bases-timeline-axis-label.is-week-label {
 	max-width: 120px;
 	font-size: 0.72rem;

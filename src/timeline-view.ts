@@ -27,9 +27,16 @@ interface TimelineConfig {
 	labelColWidth: number;
 }
 
+interface ContextSegment {
+	start: Date;
+	end: Date;
+	label: string;
+}
+
 const LABEL_COLUMN_WIDTH_PX = 175;
 const LABEL_COLUMN_MIN_PX = 80;
 const LABEL_COLUMN_MAX_PX = 500;
+const PROPERTY_SCAN_ENTRY_LIMIT = 2000;
 
 const HUE_VARS = ['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'purple', 'pink'];
 
@@ -226,6 +233,7 @@ export class TimelineView extends BasesView {
 		this.controlsEl.toggleClass('is-collapsed', !isVisible);
 		if (!isVisible) return;
 
+		const entries = this.getVisibleEntries();
 		const allProps = [...(this.allProperties ?? [])].sort((a, b) =>
 			this.getPropertyName(a).localeCompare(this.getPropertyName(b))
 		);
@@ -287,8 +295,16 @@ export class TimelineView extends BasesView {
 
 		if (!config.colorProp) return;
 
+		if (this.shouldDeferPropertyScan(entries.length)) {
+			this.controlsEl.createDiv({
+				cls: 'bases-timeline-controls-empty',
+				text: `Add a Bases filter before loading color values. This view currently has ${entries.length.toLocaleString()} entries.`,
+			});
+			return;
+		}
+
 		// Color pickers for each unique value
-		const uniqueValues = this.getUniqueColorValues(config.colorProp);
+		const uniqueValues = this.getUniqueColorValues(entries, config.colorProp);
 		const { colorMap, changed } = this.ensureColorMap(config.colorMap, uniqueValues);
 		if (changed) {
 			this.config.set('colorMap', colorMap);
@@ -352,10 +368,18 @@ export class TimelineView extends BasesView {
 
 	private renderTimeline(config: TimelineConfig): void {
 		const groups = this.data.groupedData || [];
-		const entries = groups.flatMap(group => group.entries);
+		const entries = this.getVisibleEntries();
 
 		if (!config.startDateProp || !config.endDateProp) {
 			this.bodyEl.createDiv({ cls: 'bases-timeline-empty', text: 'Select start and end date fields in view options.' });
+			return;
+		}
+
+		if (this.shouldDeferPropertyScan(entries.length)) {
+			this.bodyEl.createDiv({
+				cls: 'bases-timeline-empty',
+				text: `Add a Bases filter before loading start and end dates. This view currently has ${entries.length.toLocaleString()} entries.`,
+			});
 			return;
 		}
 
@@ -504,105 +528,106 @@ export class TimelineView extends BasesView {
 
 	private renderContextHeader(containerEl: HTMLElement, min: Date, max: Date, scale: string): void {
 		const headerEl = containerEl.createDiv({ cls: 'bases-timeline-context-header', attr: { 'data-scale': scale } });
+		const segments = this.getContextSegments(min, max, scale);
+		this.renderContextSegments(headerEl, segments, min, max);
+	}
+
+	private getContextSegments(min: Date, max: Date, scale: string): ContextSegment[] {
+		if (scale === 'week') {
+			return this.buildContextSegments(
+				min,
+				max,
+				date => {
+					const current = new Date(date);
+					current.setDate(1);
+					return current;
+				},
+				date => {
+					const next = new Date(date);
+					next.setMonth(next.getMonth() + 1, 1);
+					return next;
+				},
+				date => new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' }).format(date),
+			);
+		}
+
+		if (scale === 'month' || scale === 'quarter') {
+			return this.buildContextSegments(
+				min,
+				max,
+				date => {
+					const current = new Date(date);
+					current.setMonth(0, 1);
+					return current;
+				},
+				date => {
+					const next = new Date(date);
+					next.setFullYear(next.getFullYear() + 1, 0, 1);
+					return next;
+				},
+				date => date.getFullYear().toString(),
+			);
+		}
+
+		if (scale === 'year') {
+			return this.buildContextSegments(
+				min,
+				max,
+				date => {
+					const current = new Date(date);
+					const decade = Math.floor(current.getFullYear() / 10) * 10;
+					current.setFullYear(decade, 0, 1);
+					return current;
+				},
+				date => {
+					const next = new Date(date);
+					next.setFullYear(next.getFullYear() + 10, 0, 1);
+					return next;
+				},
+				date => `${date.getFullYear()}–${date.getFullYear() + 9}`,
+			);
+		}
+
+		return [];
+	}
+
+	private buildContextSegments(
+		min: Date,
+		max: Date,
+		alignStart: (date: Date) => Date,
+		getNext: (date: Date) => Date,
+		getLabel: (date: Date) => string,
+	): ContextSegment[] {
+		const segments: ContextSegment[] = [];
+		let current = alignStart(min);
+
+		while (current <= max) {
+			const next = getNext(current);
+			segments.push({
+				start: new Date(current),
+				end: next,
+				label: getLabel(current),
+			});
+			current = next;
+		}
+
+		return segments;
+	}
+
+	private renderContextSegments(headerEl: HTMLElement, segments: ContextSegment[], min: Date, max: Date): void {
 		const total = max.getTime() - min.getTime();
 
-		if (scale === 'week') {
-			// Show month context
-			const monthStart = new Date(min);
-			monthStart.setDate(1);
-			const monthEnd = new Date(monthStart);
-			monthEnd.setMonth(monthEnd.getMonth() + 1, 0);
+		for (const segment of segments) {
+			const offset = Math.max(0, segment.start.getTime() - min.getTime());
+			const endOffset = Math.min(total, segment.end.getTime() - min.getTime());
+			const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
+			const left = total === 0 ? 0 : (offset / total) * 100;
 
-			let current = new Date(monthStart);
-			while (current <= max) {
-				const offset = Math.max(0, current.getTime() - min.getTime());
-				const nextMonth = new Date(current);
-				nextMonth.setMonth(nextMonth.getMonth() + 1, 1);
-				const endOffset = Math.min(total, nextMonth.getTime() - min.getTime());
-				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
-				const left = total === 0 ? 0 : (offset / total) * 100;
+			if (width <= 0 || left >= 100) continue;
 
-				if (width > 0 && left < 100) {
-					const label = new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' }).format(current);
-					const monthEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
-					monthEl.style.left = `${left}%`;
-					monthEl.style.width = `${width}%`;
-				}
-
-				current.setMonth(current.getMonth() + 1, 1);
-			}
-		} else if (scale === 'month') {
-			// Show year context
-			let current = new Date(min);
-			current.setMonth(0, 1);
-			const yearEnd = new Date(current);
-			yearEnd.setFullYear(yearEnd.getFullYear() + 1, 0, 1);
-
-			while (current <= max) {
-				const offset = Math.max(0, current.getTime() - min.getTime());
-				const nextYear = new Date(current);
-				nextYear.setFullYear(nextYear.getFullYear() + 1, 0, 1);
-				const endOffset = Math.min(total, nextYear.getTime() - min.getTime());
-				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
-				const left = total === 0 ? 0 : (offset / total) * 100;
-
-				if (width > 0 && left < 100) {
-					const label = current.getFullYear().toString();
-					const yearEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
-					yearEl.style.left = `${left}%`;
-					yearEl.style.width = `${width}%`;
-				}
-
-				current.setFullYear(current.getFullYear() + 1);
-			}
-		} else if (scale === 'quarter') {
-			// Show year context with quarter markers
-			let current = new Date(min);
-			current.setMonth(0, 1);
-
-			while (current <= max) {
-				const offset = Math.max(0, current.getTime() - min.getTime());
-				const nextYear = new Date(current);
-				nextYear.setFullYear(nextYear.getFullYear() + 1, 0, 1);
-				const endOffset = Math.min(total, nextYear.getTime() - min.getTime());
-				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
-				const left = total === 0 ? 0 : (offset / total) * 100;
-
-				if (width > 0 && left < 100) {
-					const label = current.getFullYear().toString();
-					const yearEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
-					yearEl.style.left = `${left}%`;
-					yearEl.style.width = `${width}%`;
-				}
-
-				current.setFullYear(current.getFullYear() + 1);
-			}
-		} else if (scale === 'year') {
-			// Show decade context
-			let current = new Date(min);
-			const decade = Math.floor(current.getFullYear() / 10) * 10;
-			current.setFullYear(decade, 0, 1);
-
-			while (current <= max) {
-				const decadeStart = current.getFullYear();
-				const decadeEnd = decadeStart + 9;
-				const decadeEndDate = new Date(current);
-				decadeEndDate.setFullYear(decadeEnd + 1, 0, 1);
-
-				const offset = Math.max(0, current.getTime() - min.getTime());
-				const endOffset = Math.min(total, decadeEndDate.getTime() - min.getTime());
-				const width = total === 0 ? 0 : ((endOffset - offset) / total) * 100;
-				const left = total === 0 ? 0 : (offset / total) * 100;
-
-				if (width > 0 && left < 100) {
-					const label = `${decadeStart}–${decadeEnd}`;
-					const decadeEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: label });
-					decadeEl.style.left = `${left}%`;
-					decadeEl.style.width = `${width}%`;
-				}
-
-				current.setFullYear(current.getFullYear() + 10);
-			}
+			const segmentEl = headerEl.createDiv({ cls: 'bases-timeline-context-segment', text: segment.label });
+			segmentEl.style.left = `${left}%`;
+			segmentEl.style.width = `${width}%`;
 		}
 	}
 
@@ -657,20 +682,31 @@ export class TimelineView extends BasesView {
 	private renderDayLabels(labelsEl: HTMLElement, dayTicks: Date[], min: Date, max: Date, weekStart: 'monday' | 'sunday'): void {
 		labelsEl.addClass('is-day-scale');
 		const total = max.getTime() - min.getTime();
+		const oneDayMs = 1000 * 60 * 60 * 24;
 
 		for (let i = 0; i < dayTicks.length; i++) {
 			const date = dayTicks[i];
-			const offset = date.getTime() - min.getTime();
-			const ratio = total === 0 ? 0 : offset / total;
-			if (ratio < -0.01 || ratio > 1.01) continue;
+			const startMs = Math.max(min.getTime(), date.getTime());
+			const nextTick = dayTicks[i + 1];
+			const endMs = Math.min(max.getTime(), nextTick ? nextTick.getTime() : date.getTime() + oneDayMs);
+			if (endMs <= startMs) continue;
 
-			const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(date).slice(0, 2);
+			const leftRatio = total === 0 ? 0 : (startMs - min.getTime()) / total;
+			const widthRatio = total === 0 ? 1 : (endMs - startMs) / total;
+			if (leftRatio < -0.01 || leftRatio > 1.01) continue;
+
+			const weekday = this.getCompactWeekdayLabel(date, weekStart);
 			const dayEl = labelsEl.createDiv({ cls: 'bases-timeline-axis-label is-day-label', text: `${weekday} ${date.getDate()}` });
-			dayEl.style.left = `${ratio * 100}%`;
-			if (ratio < 0.03) dayEl.style.transform = 'translateX(0)';
-			else if (ratio > 0.97) dayEl.style.transform = 'translateX(-100%)';
-			else dayEl.style.transform = 'translateX(-50%)';
+			dayEl.style.left = `${leftRatio * 100}%`;
+			dayEl.style.width = `${Math.max(0, widthRatio * 100)}%`;
 		}
+	}
+
+	private getCompactWeekdayLabel(date: Date, weekStart: 'monday' | 'sunday'): string {
+		const mondayLabels = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+		const sundayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+		const labels = weekStart === 'sunday' ? sundayLabels : mondayLabels;
+		return labels[date.getDay()] ?? new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(date).slice(0, 2);
 	}
 
 	private attachResizeHandle(labelEl: HTMLElement, config: TimelineConfig): void {
@@ -1195,9 +1231,17 @@ export class TimelineView extends BasesView {
 		return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
 	}
 
-	private getUniqueColorValues(colorProp: BasesPropertyId): string[] {
+	private getVisibleEntries(): BasesEntry[] {
+		return (this.data.groupedData || []).flatMap(group => group.entries);
+	}
+
+	private shouldDeferPropertyScan(entryCount: number): boolean {
+		return entryCount > PROPERTY_SCAN_ENTRY_LIMIT;
+	}
+
+	private getUniqueColorValues(entries: BasesEntry[], colorProp: BasesPropertyId): string[] {
 		const values = new Set<string>();
-		for (const entry of this.data.data) {
+		for (const entry of entries) {
 			const value = entry.getValue(colorProp);
 			if (!value || !value.isTruthy()) continue;
 			values.add(value.toString());
