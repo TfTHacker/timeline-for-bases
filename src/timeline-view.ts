@@ -1277,15 +1277,17 @@ export class TimelineView extends BasesView {
 			barEl.createDiv({ cls: 'bases-timeline-bar-handle is-start' });
 			barEl.createDiv({ cls: 'bases-timeline-bar-handle is-end' });
 
-			// Single mousedown on the bar — detect drag type from click position
+			// Single mousedown on the bar — detect drag type from click position relative to bar
 			barEl.addEventListener('mousedown', e => {
 				e.preventDefault();
-				const barWidth = barEl.offsetWidth || 1;
+				const barRect = barEl.getBoundingClientRect();
+				const barWidth = barRect.width || 1;
+				const clickX = e.clientX - barRect.left; // always relative to bar, not child elements
 				const EDGE = Math.min(10, barWidth * 0.3); // edge threshold px
 				let type: DragState['type'];
-				if (e.offsetX <= EDGE) {
+				if (clickX <= EDGE) {
 					type = 'resize-start';
-				} else if (e.offsetX >= barWidth - EDGE) {
+				} else if (clickX >= barWidth - EDGE) {
 					type = 'resize-end';
 				} else {
 					type = 'move';
