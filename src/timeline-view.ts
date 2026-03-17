@@ -359,36 +359,68 @@ export class TimelineView extends BasesView {
 			return;
 		}
 
-		// Single-pass: cache entry dates and compute range simultaneously
-		const entryDatesCache = new Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>();
-		let minDate: Date | null = null;
-		let maxDate: Date | null = null;
-		for (const entry of entries) {
-			const dates = this.getEntryDates(entry, config.startDateProp!, config.endDateProp!);
-			entryDatesCache.set(entry, dates);
-			if (!dates) continue;
-			if (!minDate || dates.start < minDate) minDate = dates.start;
-			if (!maxDate || dates.end > maxDate) maxDate = dates.end;
-		}
-
-		if (!minDate || !maxDate) {
-			this.bodyEl.createDiv({ cls: 'bases-timeline-empty', text: 'No tasks match the current filtered view.' });
-			return;
-		}
-
-		// Use saved range window from config if available (rangeStartDate + rangePresetDays).
-		// This keeps the time scale fixed regardless of dataset size.
-		// Fall back to data-derived range only when no window is saved.
+		// --- Step 1: Determine render window ---
+		// Do this FIRST so we can skip expensive entry.getValue() calls for out-of-range entries.
 		const rangeStartMs = this.config.get('rangeStartDate');
 		const rangePresetDays = this.config.get('rangePresetDays');
 		let min: Date;
 		let max: Date;
+		let hasFixedWindow = false;
+
 		if (typeof rangeStartMs === 'number' && rangeStartMs > 0 && typeof rangePresetDays === 'number' && rangePresetDays > 0) {
 			min = new Date(rangeStartMs);
 			min.setHours(0, 0, 0, 0);
 			max = new Date(min.getTime() + rangePresetDays * 24 * 60 * 60 * 1000);
 			max.setHours(23, 59, 59, 999);
+			hasFixedWindow = true;
 		} else {
+			// Placeholder — will be overwritten below after scanning all entries
+			min = new Date();
+			max = new Date();
+		}
+
+		// --- Step 2: Build entry dates cache ---
+		// With a fixed window: use cheap metadata cache for pre-filtering.
+		// Only call entry.getValue() for entries that might fall within the window.
+		// Without a fixed window: call getEntryDates() for all entries to compute auto-fit range.
+		const entryDatesCache = new Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>();
+		const startPropName = config.startDateProp && String(config.startDateProp).startsWith('note.')
+			? this.getPropertyName(config.startDateProp)
+			: null;
+
+		for (const entry of entries) {
+			if (hasFixedWindow && startPropName) {
+				// Fast pre-filter: if metadata cache says start > window end, skip entirely
+				const cache = this.app.metadataCache.getFileCache(entry.file);
+				const cachedStartRaw = cache?.frontmatter?.[startPropName];
+				if (cachedStartRaw != null) {
+					const rawVal = cachedStartRaw instanceof Date ? cachedStartRaw.getTime()
+					: typeof cachedStartRaw === 'number' ? cachedStartRaw
+					: typeof cachedStartRaw === 'string' ? Date.parse(cachedStartRaw)
+					: NaN;
+				const quickStart = Number.isNaN(rawVal) ? null : new Date(rawVal);
+					if (quickStart && quickStart > max) {
+						entryDatesCache.set(entry, null);
+						continue; // skip expensive entry.getValue()
+					}
+				}
+			}
+			entryDatesCache.set(entry, this.getEntryDates(entry, config.startDateProp!, config.endDateProp!));
+		}
+
+		// --- Step 3: Auto-fit range if no fixed window ---
+		if (!hasFixedWindow) {
+			let minDate: Date | null = null;
+			let maxDate: Date | null = null;
+			for (const dates of entryDatesCache.values()) {
+				if (!dates) continue;
+				if (!minDate || dates.start < minDate) minDate = dates.start;
+				if (!maxDate || dates.end > maxDate) maxDate = dates.end;
+			}
+			if (!minDate || !maxDate) {
+				this.bodyEl.createDiv({ cls: 'bases-timeline-empty', text: 'No tasks match the current filtered view.' });
+				return;
+			}
 			min = this.snapStartToScale(minDate, config.timeScale, config.weekStart);
 			max = this.snapEndToScale(maxDate, config.timeScale, config.weekStart);
 			const weekMs = 7 * 24 * 60 * 60 * 1000;
