@@ -61,6 +61,9 @@ interface DragState {
 	trackWidth: number;     // px width of track element (for px→% conversion)
 	rangeMin: Date;         // local midnight (= timeline min)
 	totalMs: number;        // max - min in ms
+	// Updated each mousemove — used directly in mouseup to avoid CSS precision loss
+	pendingStart: Date;
+	pendingEnd: Date;
 }
 
 export class TimelineView extends BasesView {
@@ -1322,10 +1325,14 @@ export class TimelineView extends BasesView {
 		totalMs: number
 	): void {
 		const trackEl = barEl.parentElement!;
+		const lmStart = this._localMidnight(origStart);
+		const lmEnd   = this._localMidnight(origEnd);
 		this._dragState = {
 			type, barEl, entryPath, startPropKey, endPropKey,
-			origStart: this._localMidnight(origStart),
-			origEnd:   this._localMidnight(origEnd),
+			origStart: lmStart,
+			origEnd:   lmEnd,
+			pendingStart: new Date(lmStart),
+			pendingEnd:   new Date(lmEnd),
 			mouseStartX: mouseX,
 			trackWidth: trackEl.offsetWidth || 1,
 			rangeMin, totalMs,
@@ -1387,6 +1394,10 @@ export class TimelineView extends BasesView {
 			// right edge stays fixed
 		}
 
+		// Store dates in state — used directly on mouseup (avoids CSS precision loss)
+		s.pendingStart = new Date(newStart);
+		s.pendingEnd   = new Date(newEnd);
+
 		this._refreshTooltip(newStart, newEnd);
 		if (this._dragTooltipEl) {
 			this._dragTooltipEl.style.left = `${e.clientX + 14}px`;
@@ -1405,22 +1416,10 @@ export class TimelineView extends BasesView {
 		this._dragTooltipEl?.remove();
 		this._dragTooltipEl = null;
 
-		// Compute final dates from bar's current style
-		const leftPct  = parseFloat(s.barEl.style.left)  || 0;
-		const widthPct = parseFloat(s.barEl.style.width) || 0;
-
-		const newStartMs = s.rangeMin.getTime() + (leftPct / 100) * s.totalMs;
-		const newStart = new Date(newStartMs); newStart.setHours(0, 0, 0, 0);
-
-		let newEnd: Date;
-		if (s.type === 'move') {
-			const origDurMs = s.origEnd.getTime() - s.origStart.getTime();
-			newEnd = new Date(newStart.getTime() + origDurMs); newEnd.setHours(0, 0, 0, 0);
-		} else {
-			// bar width includes the +1 day exclusive end; subtract to get inclusive end
-			const endExclMs = s.rangeMin.getTime() + ((leftPct + widthPct) / 100) * s.totalMs;
-			newEnd = new Date(endExclMs - 86400000); newEnd.setHours(0, 0, 0, 0);
-		}
+		// Use pendingStart/End tracked during drag — do NOT reconstruct from CSS
+		// (CSS percentage precision loss causes off-by-one-day errors)
+		const newStart = s.pendingStart;
+		const newEnd   = s.pendingEnd;
 
 		const file = this.app.vault.getFileByPath(s.entryPath);
 		if (!file) return;
