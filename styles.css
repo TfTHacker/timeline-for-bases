@@ -747,7 +747,7 @@ body.bases-timeline-resizing * {
 }
 
 .bases-timeline-row.is-even {
-	background: var(--background-secondary);
+	background: transparent;
 }
 
 /* Industry pattern: full-row highlight on hover (like monday.com) */

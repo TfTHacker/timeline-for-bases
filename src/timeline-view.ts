@@ -390,6 +390,9 @@ export class TimelineView extends BasesView {
 			}
 			this.renderTimeAxis(canvasEl, min, max, config, ticks);
 			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.labelColWidth);
+			if (config.timeScale === 'day') {
+				this.renderTodayMarker(canvasEl, min, max, true, config.labelColWidth);
+			}
 			this.attachRowClickHandler(canvasEl);
 
 			// Defer all entry work async — yields to browser between chunks
@@ -482,6 +485,9 @@ export class TimelineView extends BasesView {
 			}
 			this.renderTimeAxis(canvasEl, min, max, config, ticks);
 			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.labelColWidth);
+			if (config.timeScale === 'day') {
+				this.renderTodayMarker(canvasEl, min, max, true, config.labelColWidth);
+			}
 			this.attachRowClickHandler(canvasEl);
 
 			for (const group of groups) {
@@ -1106,23 +1112,6 @@ export class TimelineView extends BasesView {
 		labelEl.createEl('span', { text: label });
 
 		const trackEl = rowEl.createDiv({ cls: 'bases-timeline-track' });
-
-		// Render per-row grid lines (keeps grid visible through alternating row backgrounds)
-		if (ticks && ticks.length > 0) {
-			this.renderTrackGridLines(trackEl, ticks, min, max, config.timeScale, config.weekStart);
-		}
-
-		if (config.timeScale === 'day') {
-			const today = new Date();
-			today.setHours(0, 0, 0, 0);
-			if (today >= min && today <= max) {
-				const total2 = max.getTime() - min.getTime();
-				const leftToday = total2 === 0 ? 0 : ((today.getTime() - min.getTime()) / total2) * 100;
-				const todayLine = trackEl.createDiv({ cls: 'bases-timeline-today-marker' });
-				todayLine.style.left = `${leftToday}%`;
-				todayLine.setAttribute('title', `Today: ${today.toLocaleDateString()}`);
-			}
-		}
 
 		const dates = entryDatesCache.get(entry) ?? null;
 		if (!dates) {
