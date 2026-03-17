@@ -539,11 +539,11 @@
 	opacity: 0.3;
 }
 
-/* Minor grid lines (subtle, faint) */
+/* Minor grid lines (subtle, faint) — day separators on day scale */
 .bases-timeline-grid-line.is-minor {
 	width: 1px;
-	opacity: 0.1;
-	background: var(--background-modifier-border);
+	opacity: 0.2;
+	background: var(--color-base-50, var(--background-modifier-border));
 }
 
 /* Major grid lines (primary scale divisions) */
