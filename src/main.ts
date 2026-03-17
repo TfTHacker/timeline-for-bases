@@ -3,12 +3,10 @@ import { TimelineView } from './timeline-view';
 
 interface TimelinePluginSettings {
 	defaultWeekStart: 'monday' | 'sunday';
-	defaultDensity: 'comfortable' | 'compact';
 }
 
 const DEFAULT_SETTINGS: TimelinePluginSettings = {
 	defaultWeekStart: 'monday',
-	defaultDensity: 'comfortable',
 };
 
 export default class TimelinePlugin extends Plugin {
@@ -23,54 +21,81 @@ export default class TimelinePlugin extends Plugin {
 			options: TimelineView.getViewOptions,
 		});
 
-		this.addCommand({
-			id: 'timeline-capture-current-view',
-			name: 'Timeline: Capture current view screenshot',
-			callback: async () => {
-				await this.captureTimelineScreenshot();
-			},
-		});
-
 		this.addSettingTab(new TimelineSettingTab(this.app, this));
 	}
 
-	private async captureTimelineScreenshot(): Promise<void> {
-		const timelineEl = document.querySelector('.bases-timeline-view') as HTMLElement | null;
-		if (!timelineEl) {
-			new Notice('Timeline view not found. Open a Timeline view first.');
-			return;
+	async createSampleBase(): Promise<void> {
+		const folder = 'Timeline Sample';
+		const basePath = normalizePath(`${folder}/Family Vacation Planning.base`);
+
+		// Create folder
+		if (!await this.app.vault.adapter.exists(folder)) {
+			await this.app.vault.createFolder(folder);
 		}
 
-		try {
-			const html2canvas = (await import('html2canvas')).default;
-			const canvas = await html2canvas(timelineEl, {
-				backgroundColor: null,
-				scale: window.devicePixelRatio || 1,
-				useCORS: true,
-			});
+		// Generate 10 vacation planning tasks relative to today
+		const today = new Date();
+		const fmt = (d: Date) => d.toISOString().slice(0, 10);
+		const addDays = (d: Date, n: number) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
 
-			const dataUrl = canvas.toDataURL('image/png');
-			const bytes = this.dataUrlToBytes(dataUrl);
-			const filePath = normalizePath(`Screenshots/timeline-${Date.now()}.png`);
+		const tasks: { name: string; start: number; duration: number; priority: 'High' | 'Medium' | 'Low' }[] = [
+			{ name: 'Set vacation budget',            start: 0,  duration: 3,  priority: 'High'   },
+			{ name: 'Choose destination',             start: 2,  duration: 4,  priority: 'High'   },
+			{ name: 'Research accommodation options', start: 5,  duration: 5,  priority: 'Medium' },
+			{ name: 'Book flights',                   start: 8,  duration: 2,  priority: 'High'   },
+			{ name: 'Book accommodation',             start: 10, duration: 2,  priority: 'High'   },
+			{ name: 'Plan daily itinerary',           start: 12, duration: 7,  priority: 'Medium' },
+			{ name: 'Arrange pet care',               start: 14, duration: 3,  priority: 'Medium' },
+			{ name: 'Pack luggage',                   start: 25, duration: 2,  priority: 'Low'    },
+			{ name: 'Confirm all bookings',           start: 20, duration: 1,  priority: 'High'   },
+			{ name: 'Purchase travel insurance',      start: 6,  duration: 1,  priority: 'Low'    },
+		];
 
-			await this.app.vault.adapter.mkdir('Screenshots').catch(() => {});
-			await this.app.vault.adapter.writeBinary(filePath, bytes.buffer as ArrayBuffer);
-
-			new Notice(`Timeline screenshot saved: ${filePath}`);
-		} catch (error) {
-			console.error('Timeline screenshot failed:', error);
-			new Notice('Timeline screenshot failed. Check console for details.');
+		for (const task of tasks) {
+			const startDate = addDays(today, task.start);
+			const endDate = addDays(today, task.start + task.duration);
+			const filePath = normalizePath(`${folder}/${task.name}.md`);
+			const content = `---\nstart: ${fmt(startDate)}\nend: ${fmt(endDate)}\npriority: ${task.priority}\nstatus: open\n---\n\n# ${task.name}\n`;
+			if (!await this.app.vault.adapter.exists(filePath)) {
+				await this.app.vault.create(filePath, content);
+			}
 		}
-	}
 
-	private dataUrlToBytes(dataUrl: string): Uint8Array {
-		const base64 = dataUrl.split(',')[1] || '';
-		const binary = atob(base64);
-		const bytes = new Uint8Array(binary.length);
-		for (let i = 0; i < binary.length; i++) {
-			bytes[i] = binary.charCodeAt(i);
+		// Create the .base file
+		const baseContent = `filters:
+  and:
+    - "!start.isEmpty()"
+views:
+  - type: timeline
+    name: Family Vacation Planning
+    filters:
+      and:
+        - file.folder == "${folder}"
+    sort:
+      - property: start
+        direction: ASC
+    startDate: note.start
+    endDate: note.end
+    label: note.title
+    colorBy: note.priority
+    colorMap:
+      High: "#e03131"
+      Medium: "#f59f00"
+      Low: "#2f9e44"
+    timeScale: day
+    zoom: 1
+`;
+		if (!await this.app.vault.adapter.exists(basePath)) {
+			await this.app.vault.create(basePath, baseContent);
 		}
-		return bytes;
+
+		new Notice(`Sample base created in "${folder}" — open Family Vacation Planning.base to view.`);
+
+		// Open the base file
+		const file = this.app.vault.getFileByPath(basePath);
+		if (file) {
+			await this.app.workspace.getLeaf(false).openFile(file);
+		}
 	}
 
 	async loadSettings(): Promise<void> {
@@ -109,5 +134,21 @@ class TimelineSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		new Setting(containerEl)
+			.setName('Create sample base')
+			.setDesc('Creates a "Timeline Sample" folder in your vault with 10 family vacation planning tasks and a ready-to-use Timeline base. Tasks use today\'s date as the starting point.')
+			.addButton(btn => btn
+				.setButtonText('Create sample')
+				.setCta()
+				.onClick(async () => {
+					btn.setDisabled(true);
+					btn.setButtonText('Creating…');
+					try {
+						await this.plugin.createSampleBase();
+					} finally {
+						btn.setDisabled(false);
+						btn.setButtonText('Create sample');
+					}
+				}));
 	}
 }
