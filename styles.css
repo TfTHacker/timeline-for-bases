@@ -421,6 +421,12 @@
 	font-size: 0.72rem;
 	font-weight: 500;
 	color: var(--text-muted);
+	transform: none;
+	max-width: none;
+	padding: 0 2px;
+	box-sizing: border-box;
+	text-align: center;
+	overflow: hidden;
 }
 
 
@@ -741,7 +747,7 @@ body.bases-timeline-resizing * {
 }
 
 .bases-timeline-row.is-even {
-	background: transparent;
+	background: var(--background-secondary);
 }
 
 /* Industry pattern: full-row highlight on hover (like monday.com) */
