@@ -911,6 +911,21 @@ body.bases-timeline-resizing * {
 .bases-timeline-bar-handle.is-end   { right: 0; border-radius: 0 4px 4px 0; }
 .bases-timeline-bar:hover .bases-timeline-bar-handle { opacity: 1; }
 
+/* Multi-select: selected bar */
+.bases-timeline-bar.is-selected {
+	outline: 2px solid var(--color-accent);
+	outline-offset: 1px;
+	filter: brightness(1.1);
+}
+
+/* Context menu edit-dates popover label */
+.tl-pop-label {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin-top: 4px;
+	display: block;
+}
+
 /* Active drag state */
 .bases-timeline-bar.is-dragging {
 	opacity: 0.8;

@@ -7,6 +7,7 @@ import {
 	BasesView,
 	BasesViewConfig,
 	DateValue,
+	Menu,
 	NullValue,
 	Notice,
 	QueryController,
@@ -51,6 +52,16 @@ const PALETTE: string[] = [
 
 const DEFAULT_COLORS = PALETTE;
 
+interface UndoRecord {
+	entries: Array<{
+		path: string;
+		startKey: string;
+		endKey: string;
+		before: { start: string; end: string };
+		after:  { start: string; end: string };
+	}>;
+}
+
 interface DragState {
 	type: 'move' | 'resize-start' | 'resize-end';
 	barEl: HTMLElement;
@@ -83,10 +94,18 @@ export class TimelineView extends BasesView {
 	private _rangeMax: Date | null = null;
 	private _lastConfig: TimelineConfig | null = null;
 
+	// Multi-select
+	private _selectedPaths = new Set<string>();
+
+	// Undo / redo
+	private _undoStack: UndoRecord[] = [];
+	private _redoStack: UndoRecord[] = [];
+
 	private _dragState: DragState | null = null;
 	private _dragTooltipEl: HTMLElement | null = null;
 	private _boundMouseMove!: (e: MouseEvent) => void;
 	private _boundMouseUp!: (e: MouseEvent) => void;
+	private _boundKeyDown!: (e: KeyboardEvent) => void;
 
 	private onResizeDebounce = debounce(() => this.render(), 100, true);
 	private onDataDebounce = debounce(() => this.render(), 300, false);
@@ -103,14 +122,18 @@ export class TimelineView extends BasesView {
 	onload(): void {
 		this._boundMouseMove = this._onDragMove.bind(this);
 		this._boundMouseUp = this._onDragEnd.bind(this);
+		this._boundKeyDown = this._onKeyDown.bind(this);
 		document.addEventListener('mousemove', this._boundMouseMove);
 		document.addEventListener('mouseup', this._boundMouseUp);
+		this.containerEl.addEventListener('keydown', this._boundKeyDown);
+		this.containerEl.setAttribute('tabindex', '-1'); // allow keyboard focus
 		this.render();
 	}
 
 	onunload(): void {
 		document.removeEventListener('mousemove', this._boundMouseMove);
 		document.removeEventListener('mouseup', this._boundMouseUp);
+		this.containerEl.removeEventListener('keydown', this._boundKeyDown);
 		this._dragTooltipEl?.remove();
 		this.containerEl.empty();
 	}
@@ -1368,6 +1391,9 @@ export class TimelineView extends BasesView {
 		const startPropKey = config.startDateProp ? String(config.startDateProp).replace(/^note\./, '') : null;
 		const endPropKey   = config.endDateProp   ? String(config.endDateProp).replace(/^note\./, '')   : null;
 
+		// Mark bar as selected if in selection set
+		if (this._selectedPaths.has(entry.file.path)) barEl.addClass('is-selected');
+
 		if (startPropKey && endPropKey && !dates.isPoint) {
 			// Visual-only resize handles (no event listeners — cursor comes from CSS)
 			barEl.createDiv({ cls: 'bases-timeline-bar-handle is-start' });
@@ -1376,10 +1402,29 @@ export class TimelineView extends BasesView {
 			// Single mousedown on the bar — detect drag type from click position relative to bar
 			barEl.addEventListener('mousedown', e => {
 				e.preventDefault();
+				this.containerEl.focus();
+
+				// Shift+click: toggle selection, no drag
+				if (e.shiftKey) {
+					if (this._selectedPaths.has(entry.file.path)) {
+						this._selectedPaths.delete(entry.file.path);
+						barEl.removeClass('is-selected');
+					} else {
+						this._selectedPaths.add(entry.file.path);
+						barEl.addClass('is-selected');
+					}
+					return;
+				}
+
+				// Click without shift on unselected bar: clear other selections
+				if (!this._selectedPaths.has(entry.file.path)) {
+					this._clearSelection();
+				}
+
 				const barRect = barEl.getBoundingClientRect();
 				const barWidth = barRect.width || 1;
-				const clickX = e.clientX - barRect.left; // always relative to bar, not child elements
-				const EDGE = Math.min(10, barWidth * 0.3); // edge threshold px
+				const clickX = e.clientX - barRect.left;
+				const EDGE = Math.min(10, barWidth * 0.3);
 				let type: DragState['type'];
 				if (clickX <= EDGE) {
 					type = 'resize-start';
@@ -1390,6 +1435,12 @@ export class TimelineView extends BasesView {
 				}
 				this._startDrag(type, barEl, entry.file.path, startPropKey, endPropKey,
 					dates!.start, dates!.end, e.clientX, min, total);
+			});
+
+			// Right-click context menu
+			barEl.addEventListener('contextmenu', (e: MouseEvent) => {
+				e.preventDefault();
+				this._showContextMenu(e, entry, startPropKey, endPropKey, dates!.start, dates!.end);
 			});
 		}
 	}
@@ -1494,6 +1545,153 @@ export class TimelineView extends BasesView {
 		} catch (err) {
 			console.error('[Timeline] Export failed:', err);
 			new Notice('Export failed — check console.');
+		}
+	}
+
+	// ─── Selection ───────────────────────────────────────────────────────────
+
+	private _clearSelection(): void {
+		this._selectedPaths.clear();
+		this.bodyEl.querySelectorAll('.bases-timeline-bar.is-selected')
+			.forEach(el => el.removeClass('is-selected'));
+	}
+
+	// ─── Context menu ─────────────────────────────────────────────────────────
+
+	private _showContextMenu(
+		e: MouseEvent,
+		entry: BasesEntry,
+		startKey: string,
+		endKey: string,
+		currentStart: Date,
+		currentEnd: Date
+	): void {
+		const menu = new Menu();
+
+		menu.addItem(item => item
+			.setTitle('Open note')
+			.setIcon('external-link')
+			.onClick(() => this.app.workspace.openLinkText(entry.file.path, '', e.ctrlKey || e.metaKey)));
+
+		menu.addSeparator();
+
+		menu.addItem(item => item
+			.setTitle('Edit dates…')
+			.setIcon('calendar')
+			.onClick(() => this._showEditDatesPopover(e, entry, startKey, endKey, currentStart, currentEnd)));
+
+		menu.addItem(item => item
+			.setTitle('Duplicate')
+			.setIcon('copy')
+			.onClick(async () => {
+				const base = entry.file.basename;
+				const dir  = entry.file.parent?.path ?? '';
+				let newPath = dir ? `${dir}/${base} copy.md` : `${base} copy.md`;
+				let n = 1;
+				while (await this.app.vault.adapter.exists(newPath)) {
+					newPath = dir ? `${dir}/${base} copy ${++n}.md` : `${base} copy ${n}.md`;
+				}
+				await this.app.vault.copy(entry.file, newPath);
+			}));
+
+		menu.addSeparator();
+
+		menu.addItem(item => item
+			.setTitle('Delete')
+			.setIcon('trash')
+			.onClick(async () => {
+				await this.app.vault.trash(entry.file, true);
+			}));
+
+		menu.showAtMouseEvent(e);
+	}
+
+	private _showEditDatesPopover(
+		e: MouseEvent,
+		entry: BasesEntry,
+		startKey: string,
+		endKey: string,
+		currentStart: Date,
+		currentEnd: Date
+	): void {
+		const existing = document.getElementById('tl-edit-dates-popover');
+		if (existing) existing.remove();
+
+		const pop = document.body.createDiv({ attr: { id: 'tl-edit-dates-popover' }, cls: 'bases-timeline-jump-popover' });
+		pop.style.top  = `${e.clientY + 6}px`;
+		pop.style.left = `${e.clientX}px`;
+
+		pop.createEl('label', { text: 'Start', cls: 'tl-pop-label' });
+		const startInput = pop.createEl('input', { type: 'date' });
+		startInput.value = this._fmtDate(currentStart);
+
+		pop.createEl('label', { text: 'End', cls: 'tl-pop-label' });
+		const endInput = pop.createEl('input', { type: 'date' });
+		endInput.value = this._fmtDate(currentEnd);
+
+		const save = pop.createEl('button', { cls: 'mod-cta', text: 'Save' });
+		save.addEventListener('click', async () => {
+			pop.remove();
+			const newStart = startInput.value;
+			const newEnd   = endInput.value;
+			if (!newStart || !newEnd) return;
+			const before = { start: this._fmtDate(currentStart), end: this._fmtDate(currentEnd) };
+			const file = this.app.vault.getFileByPath(entry.file.path);
+			if (!file) return;
+			await this.app.fileManager.processFrontMatter(file, fm => {
+				fm[startKey] = newStart;
+				fm[endKey]   = newEnd;
+			});
+			this._pushUndo([{ path: entry.file.path, startKey, endKey, before, after: { start: newStart, end: newEnd } }]);
+		});
+
+		startInput.addEventListener('click', e2 => e2.stopPropagation());
+		endInput.addEventListener('click',   e2 => e2.stopPropagation());
+		startInput.addEventListener('mousedown', e2 => e2.stopPropagation());
+		endInput.addEventListener('mousedown',   e2 => e2.stopPropagation());
+
+		const dismiss = (ev: MouseEvent) => {
+			if (!pop.contains(ev.target as Node)) { pop.remove(); document.removeEventListener('mousedown', dismiss); }
+		};
+		setTimeout(() => document.addEventListener('mousedown', dismiss), 0);
+	}
+
+	// ─── Undo / redo ─────────────────────────────────────────────────────────
+
+	private _pushUndo(entries: UndoRecord['entries']): void {
+		this._undoStack.push({ entries });
+		this._redoStack = []; // new action clears redo
+		if (this._undoStack.length > 50) this._undoStack.shift();
+	}
+
+	private async _applyUndoRecord(record: UndoRecord, direction: 'undo' | 'redo'): Promise<void> {
+		for (const e of record.entries) {
+			const file = this.app.vault.getFileByPath(e.path);
+			if (!file) continue;
+			const target = direction === 'undo' ? e.before : e.after;
+			await this.app.fileManager.processFrontMatter(file, fm => {
+				fm[e.startKey] = target.start;
+				fm[e.endKey]   = target.end;
+			});
+		}
+	}
+
+	private _onKeyDown(e: KeyboardEvent): void {
+		const ctrl = e.ctrlKey || e.metaKey;
+		if (ctrl && e.key === 'z' && !e.shiftKey) {
+			e.preventDefault();
+			const record = this._undoStack.pop();
+			if (!record) return;
+			this._redoStack.push(record);
+			void this._applyUndoRecord(record, 'undo');
+		} else if (ctrl && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+			e.preventDefault();
+			const record = this._redoStack.pop();
+			if (!record) return;
+			this._undoStack.push(record);
+			void this._applyUndoRecord(record, 'redo');
+		} else if (e.key === 'Escape') {
+			this._clearSelection();
 		}
 	}
 
@@ -1615,20 +1813,66 @@ export class TimelineView extends BasesView {
 		this._dragTooltipEl = null;
 
 		// Use pendingStart/End tracked during drag — do NOT reconstruct from CSS
-		// (CSS percentage precision loss causes off-by-one-day errors)
 		const newStart = s.pendingStart;
 		const newEnd   = s.pendingEnd;
+		const deltaMs  = newStart.getTime() - s.origStart.getTime();
 
-		const file = this.app.vault.getFileByPath(s.entryPath);
-		if (!file) return;
-		try {
-			await this.app.fileManager.processFrontMatter(file, fm => {
-				fm[s.startPropKey] = this._fmtDate(newStart);
-				fm[s.endPropKey]   = this._fmtDate(newEnd);
-			});
-		} catch (err) {
-			console.error('[Timeline] Failed to update frontmatter:', err);
+		// Build list of bars to update: the dragged bar + any other selected bars (move only)
+		const toUpdate: UndoRecord['entries'] = [];
+
+		// Primary bar
+		const primaryFile = this.app.vault.getFileByPath(s.entryPath);
+		if (primaryFile) {
+			const before = { start: this._fmtDate(s.origStart), end: this._fmtDate(s.origEnd) };
+			const after  = { start: this._fmtDate(newStart),    end: this._fmtDate(newEnd) };
+			toUpdate.push({ path: s.entryPath, startKey: s.startPropKey, endKey: s.endPropKey, before, after });
+			try {
+				await this.app.fileManager.processFrontMatter(primaryFile, fm => {
+					fm[s.startPropKey] = after.start;
+					fm[s.endPropKey]   = after.end;
+				});
+			} catch (err) { console.error('[Timeline] Failed to update frontmatter:', err); }
 		}
+
+		// Bulk-move other selected bars (only for 'move' type)
+		if (s.type === 'move' && this._selectedPaths.size > 1 && deltaMs !== 0) {
+			const otherBars = Array.from(
+				this.bodyEl.querySelectorAll<HTMLElement>('.bases-timeline-bar.is-selected')
+			).filter(el => {
+				const row = el.closest('[data-entry-path]') as HTMLElement | null;
+				return row && row.getAttribute('data-entry-path') !== s.entryPath;
+			});
+
+			for (const barEl of otherBars) {
+				const rowEl = barEl.closest('[data-entry-path]') as HTMLElement | null;
+				const path = rowEl?.getAttribute('data-entry-path');
+				if (!path) continue;
+				const file = this.app.vault.getFileByPath(path);
+				if (!file) continue;
+
+				const fmCache = this.app.metadataCache.getFileCache(file)?.frontmatter;
+				if (!fmCache) continue;
+				const oldStartStr = fmCache[s.startPropKey];
+				const oldEndStr   = fmCache[s.endPropKey];
+				if (!oldStartStr || !oldEndStr) continue;
+
+				const oldS = new Date(oldStartStr + 'T00:00:00'); oldS.setHours(0,0,0,0);
+				const oldE = new Date(oldEndStr   + 'T00:00:00'); oldE.setHours(0,0,0,0);
+				const newS = new Date(oldS.getTime() + deltaMs);
+				const newE = new Date(oldE.getTime() + deltaMs);
+
+				const before = { start: this._fmtDate(oldS), end: this._fmtDate(oldE) };
+				const after  = { start: this._fmtDate(newS), end: this._fmtDate(newE) };
+				toUpdate.push({ path, startKey: s.startPropKey, endKey: s.endPropKey, before, after });
+
+				await this.app.fileManager.processFrontMatter(file, fm => {
+					fm[s.startPropKey] = after.start;
+					fm[s.endPropKey]   = after.end;
+				});
+			}
+		}
+
+		if (toUpdate.length > 0) this._pushUndo(toUpdate);
 	}
 
 	// ─── End drag & resize ───────────────────────────────────────────────────
