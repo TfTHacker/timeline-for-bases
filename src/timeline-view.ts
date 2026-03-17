@@ -383,6 +383,7 @@ export class TimelineView extends BasesView {
 		const rangePresetDays = this.config.get('rangePresetDays');
 		let min: Date;
 		let max: Date;
+		console.log('[Timeline] rangeStartMs:', rangeStartMs, 'rangePresetDays:', rangePresetDays, 'rangeStartDate:', rangeStartMs && typeof rangeStartMs === 'number' ? new Date(rangeStartMs).toISOString() : 'none');
 		if (typeof rangeStartMs === 'number' && rangeStartMs > 0 && typeof rangePresetDays === 'number' && rangePresetDays > 0) {
 			min = new Date(rangeStartMs);
 			min.setHours(0, 0, 0, 0);
