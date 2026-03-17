@@ -282,6 +282,27 @@ export class TimelineView extends BasesView {
 		// Right side: config toggle
 		const rightEl = this.headerEl.createDiv({ cls: 'bases-timeline-header-right' });
 
+		// Undo / redo buttons
+		const undoBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn', attr: { 'aria-label': 'Undo (Ctrl+Z)' } });
+		setIcon(undoBtn.createSpan({ cls: 'nav-icon' }), 'undo');
+		undoBtn.createSpan({ text: 'Undo' });
+		undoBtn.addEventListener('click', () => {
+			const record = this._undoStack.pop();
+			if (!record) return;
+			this._redoStack.push(record);
+			void this._applyUndoRecord(record, 'undo');
+		});
+
+		const redoBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn', attr: { 'aria-label': 'Redo (Ctrl+Y)' } });
+		setIcon(redoBtn.createSpan({ cls: 'nav-icon' }), 'redo');
+		redoBtn.createSpan({ text: 'Redo' });
+		redoBtn.addEventListener('click', () => {
+			const record = this._redoStack.pop();
+			if (!record) return;
+			this._undoStack.push(record);
+			void this._applyUndoRecord(record, 'redo');
+		});
+
 		// Add task button
 		const addBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn' });
 		setIcon(addBtn.createSpan({ cls: 'nav-icon' }), 'plus');
