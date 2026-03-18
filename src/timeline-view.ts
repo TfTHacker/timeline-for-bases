@@ -94,6 +94,9 @@ export class TimelineView extends BasesView {
 	private _rangeMax: Date | null = null;
 	private _lastConfig: TimelineConfig | null = null;
 
+	// Path of a newly created note that should auto-start inline editing
+	private _pendingEditPath: string | null = null;
+
 	// Multi-select
 	private _selectedPaths = new Set<string>();
 
@@ -1309,12 +1312,24 @@ export class TimelineView extends BasesView {
 			});
 		});
 
+		// Auto inline-edit for newly added tasks
+		const isNewEntry = this._pendingEditPath === entry.file.path;
+		if (isNewEntry) this._pendingEditPath = null;
+
 		// Inline edit: pencil icon appears on hover → click to edit
 		const labelPropKey = config.labelProp ? String(config.labelProp).replace(/^note\./, '') : null;
 		if (labelPropKey) {
 			const editBtn = labelEl.createEl('button', { cls: 'bases-timeline-label-edit-btn' });
 			setIcon(editBtn, 'pencil');
 			editBtn.setAttribute('aria-label', 'Edit name');
+
+			// Auto-trigger edit for newly added note
+			if (isNewEntry) {
+				setTimeout(() => {
+					rowEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+					editBtn.click();
+				}, 80);
+			}
 
 			editBtn.addEventListener('click', (e: MouseEvent) => {
 				e.stopPropagation(); e.preventDefault();
@@ -1515,29 +1530,61 @@ export class TimelineView extends BasesView {
 	private async _addTask(config: TimelineConfig): Promise<void> {
 		const today = new Date();
 		const start = this._fmtDate(today);
-		const end   = this._fmtDate(today); // 1-day range (same day = 1 column)
+		const end   = this._fmtDate(today);
 
-		// Determine target folder: use first entry's folder, fall back to vault root
-		const entries = (this.data.groupedData || []).flatMap((g: BasesEntryGroup) => g.entries);
-		const folder = entries.length > 0 ? (entries[0].file.parent?.path ?? '') : '';
-
-		// Find unique filename
-		let name = `New task ${start}`;
-		let path = folder ? `${folder}/${name}.md` : `${name}.md`;
-		let counter = 1;
-		while (await this.app.vault.adapter.exists(path)) {
-			name = `New task ${start} ${counter++}`;
-			path = folder ? `${folder}/${name}.md` : `${name}.md`;
-		}
-
-		// Build frontmatter from configured props
 		const startKey = config.startDateProp ? String(config.startDateProp).replace(/^note\./, '') : 'start';
 		const endKey   = config.endDateProp   ? String(config.endDateProp).replace(/^note\./, '')   : 'end';
-		const content  = `---\n${startKey}: ${start}\n${endKey}: ${end}\n---\n\n# ${name}\n`;
+		const labelKey = config.labelProp     ? String(config.labelProp).replace(/^note\./, '')      : null;
 
-		const file = await this.app.vault.create(path, content);
-		// Open for editing
-		await this.app.workspace.getLeaf(false).openFile(file);
+		// Determine target folder from first visible entry
+		const entries = (this.data.groupedData || []).flatMap((g: BasesEntryGroup) => g.entries);
+		const folder  = entries.length > 0 ? (entries[0].file.parent?.path ?? '') : '';
+
+		// Smart template: clone frontmatter keys from first existing entry
+		// (detects TaskNotes-style notes — status, priority, etc. — automatically)
+		const fm: Record<string, string> = {};
+		if (entries.length > 0) {
+			const tmpl = entries[0].file;
+			const cached = this.app.metadataCache.getFileCache(tmpl)?.frontmatter ?? {};
+			for (const key of Object.keys(cached)) {
+				if (key === startKey || key === endKey) continue;
+				// Skip internal Obsidian cache key
+				if (key === 'position') continue;
+				// Use empty string as default; preserve known value types
+				const val = cached[key];
+				if (typeof val === 'boolean') fm[key] = 'false';
+				else if (typeof val === 'number') fm[key] = '0';
+				else if (Array.isArray(val)) fm[key] = '[]';
+				else fm[key] = '';
+			}
+		}
+
+		// Set date fields
+		fm[startKey] = start;
+		fm[endKey]   = end;
+
+		// Find unique filename
+		const taskName = 'New task';
+		let fileName = `${taskName} ${start}`;
+		let filePath = folder ? `${folder}/${fileName}.md` : `${fileName}.md`;
+		let n = 1;
+		while (await this.app.vault.adapter.exists(filePath)) {
+			fileName = `${taskName} ${start} ${n++}`;
+			filePath = folder ? `${folder}/${fileName}.md` : `${fileName}.md`;
+		}
+
+		// If the label property is the note title, put it in frontmatter too
+		const labelFmKey = (labelKey && labelKey !== 'title') ? labelKey : null;
+		if (labelFmKey) fm[labelFmKey] = taskName;
+
+		// Build YAML frontmatter
+		const yamlLines = Object.entries(fm).map(([k, v]) => `${k}: ${v}`).join('\n');
+		const content = `---\n${yamlLines}\n---\n\n`;
+
+		const file = await this.app.vault.create(filePath, content);
+
+		// Flag for auto inline-edit after grid re-renders
+		this._pendingEditPath = file.path;
 	}
 
 	private async _exportPng(): Promise<void> {
