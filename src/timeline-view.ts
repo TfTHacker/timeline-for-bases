@@ -271,21 +271,20 @@ export class TimelineView extends BasesView {
 		// Navigation buttons — Today & Jump to date
 		const navEl = leftEl.createDiv({ cls: 'bases-timeline-nav-buttons' });
 
-		const todayBtn = navEl.createEl('button', { cls: 'bases-timeline-nav-btn', text: 'Today' });
-		setIcon(todayBtn.createSpan({ cls: 'nav-icon' }), 'locate');
+		const todayBtn = navEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Scroll to today' } });
+		setIcon(todayBtn, 'locate');
 		todayBtn.addEventListener('click', () => this._scrollToDate(new Date()));
 
-		const jumpBtn = navEl.createEl('button', { cls: 'bases-timeline-nav-btn', text: 'Go to…' });
-		setIcon(jumpBtn.createSpan({ cls: 'nav-icon' }), 'calendar');
+		const jumpBtn = navEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Jump to date' } });
+		setIcon(jumpBtn, 'calendar');
 		jumpBtn.addEventListener('click', (e) => this._showJumpToDate(jumpBtn, e));
 
-		// Right side: config toggle
+		// Right side
 		const rightEl = this.headerEl.createDiv({ cls: 'bases-timeline-header-right' });
 
 		// Undo / redo buttons
-		const undoBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn', attr: { 'aria-label': 'Undo (Ctrl+Z)' } });
-		setIcon(undoBtn.createSpan({ cls: 'nav-icon' }), 'undo');
-		undoBtn.createSpan({ text: 'Undo' });
+		const undoBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Undo (Ctrl+Z)' } });
+		setIcon(undoBtn, 'undo');
 		undoBtn.addEventListener('click', () => {
 			const record = this._undoStack.pop();
 			if (!record) return;
@@ -293,9 +292,8 @@ export class TimelineView extends BasesView {
 			void this._applyUndoRecord(record, 'undo');
 		});
 
-		const redoBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn', attr: { 'aria-label': 'Redo (Ctrl+Y)' } });
-		setIcon(redoBtn.createSpan({ cls: 'nav-icon' }), 'redo');
-		redoBtn.createSpan({ text: 'Redo' });
+		const redoBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Redo (Ctrl+Y)' } });
+		setIcon(redoBtn, 'redo');
 		redoBtn.addEventListener('click', () => {
 			const record = this._redoStack.pop();
 			if (!record) return;
@@ -304,20 +302,19 @@ export class TimelineView extends BasesView {
 		});
 
 		// Add task button
-		const addBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn' });
+		const addBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn', attr: { 'aria-label': 'Add a new task note' } });
 		setIcon(addBtn.createSpan({ cls: 'nav-icon' }), 'plus');
-		addBtn.createSpan({ text: 'Add task' });
+		addBtn.createSpan({ text: 'Add' });
 		addBtn.addEventListener('click', () => this._addTask(config));
 
 		// Export PNG button
-		const exportBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn' });
-		setIcon(exportBtn.createSpan({ cls: 'nav-icon' }), 'image');
-		exportBtn.createSpan({ text: 'Export PNG' });
+		const exportBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Export timeline as PNG' } });
+		setIcon(exportBtn, 'image');
 		exportBtn.addEventListener('click', () => this._exportPng());
-		const toggle = rightEl.createEl('button', { cls: 'bases-timeline-controls-toggle' });
+
+		// Config toggle
+		const toggle = rightEl.createEl('button', { cls: 'bases-timeline-controls-toggle is-icon-only', attr: { 'aria-label': 'Configure colors and display' } });
 		setIcon(toggle, 'settings');
-		toggle.createSpan({ cls: 'bases-timeline-controls-toggle-label', text: 'Config' });
-		toggle.setAttribute('aria-label', 'Configuration');
 		const isVisible = this.getControlsVisible();
 		toggle.setAttribute('aria-expanded', isVisible ? 'true' : 'false');
 		toggle.addEventListener('click', () => {
