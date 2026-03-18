@@ -24,7 +24,8 @@ fi
 
 echo "Releasing $next_version from current version $current_version."
 npm version patch
+new_tag="$(git describe --tags --exact-match)"
 git push origin main
-git push origin --tags
+git push origin "$new_tag"
 
-echo "Release pushed successfully."
+echo "Release pushed successfully for tag $new_tag."

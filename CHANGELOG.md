@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.4 (unreleased)
+## 0.1.4
 
 ### New Features
 - **Draw to create dates** — on rows with no dates, the track area shows a crosshair cursor; click and drag to draw a bar and set the start/end dates directly in the note's frontmatter; respects the date properties configured in the view
