@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-timeline-for-bases",
-	"version": "0.3.0",
+	"version": "1.0.0",
 	"description": "Adds a timeline (Gantt-like) view to Obsidian Bases.",
 	"main": "main.js",
 	"scripts": {
