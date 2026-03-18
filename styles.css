@@ -163,6 +163,15 @@
 }
 .bases-timeline-nav-btn.is-icon-only svg { width: 14px; height: 14px; }
 .bases-timeline-nav-btn:hover:not(:disabled) { background: var(--background-secondary-alt); }
+
+.bases-timeline-nav-sep {
+	width: 1px;
+	height: 18px;
+	background: var(--background-modifier-border);
+	margin: 0 4px;
+	align-self: center;
+	flex-shrink: 0;
+}
 .bases-timeline-nav-btn:disabled {
 	opacity: 0.35;
 	cursor: not-allowed;

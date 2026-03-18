@@ -311,10 +311,16 @@ export class TimelineView extends BasesView {
 			this._refreshUndoRedoState();
 		});
 
+		// Separator
+		rightEl.createDiv({ cls: 'bases-timeline-nav-sep' });
+
 		// Export PNG button
 		const exportBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Export timeline as PNG' } });
 		setIcon(exportBtn, 'image');
 		exportBtn.addEventListener('click', () => this._exportPng());
+
+		// Separator
+		rightEl.createDiv({ cls: 'bases-timeline-nav-sep' });
 
 		// Config toggle
 		const toggle = rightEl.createEl('button', { cls: 'bases-timeline-controls-toggle is-icon-only', attr: { 'aria-label': 'Configure colors and display' } });
