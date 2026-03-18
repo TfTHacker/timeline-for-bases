@@ -28,6 +28,8 @@ interface TimelineConfig {
 	timeScale: 'day' | 'week' | 'month' | 'quarter' | 'year';
 	weekStart: 'monday' | 'sunday';
 	labelColWidth: number;
+	/** Raw frontmatter key used for groupBy, if any. Null when not grouped. */
+	groupByProp: string | null;
 }
 
 const LABEL_COLUMN_WIDTH_PX = 175;
@@ -211,6 +213,10 @@ export class TimelineView extends BasesView {
 		const weekStart = this.plugin.settings.defaultWeekStart;
 		const labelColWidth = this.getNumericConfig('labelColWidth', LABEL_COLUMN_WIDTH_PX, LABEL_COLUMN_MIN_PX, LABEL_COLUMN_MAX_PX);
 
+		// Read the groupBy property name from the raw Bases config
+		const rawConfig = this.config as any;
+		const groupByProp: string | null = rawConfig?.groupBy?.property ?? null;
+
 		return {
 			startDateProp,
 			endDateProp,
@@ -221,6 +227,7 @@ export class TimelineView extends BasesView {
 			timeScale,
 			weekStart,
 			labelColWidth,
+			groupByProp,
 		};
 	}
 
@@ -1285,28 +1292,58 @@ export class TimelineView extends BasesView {
 	}
 
 	private renderGroup(containerEl: HTMLElement, group: BasesEntryGroup, config: TimelineConfig, min: Date, max: Date, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>): void {
-		const isGrouped = this.data.groupedData.length > 1 || group.hasKey();
+		const isGrouped = config.groupByProp !== null && (this.data.groupedData.length > 1 || group.hasKey());
 		if (isGrouped) {
 			const groupLabel = group.key && !Value.equals(group.key, NullValue.value)
 				? group.key.toString()
 				: 'Ungrouped';
-			containerEl.createDiv({ cls: 'bases-timeline-group', text: groupLabel });
+			const groupHeaderEl = containerEl.createDiv({ cls: 'bases-timeline-group', text: groupLabel });
+
+			// Make the group header a drop target
+			groupHeaderEl.setAttribute('data-group-value', groupLabel);
+			groupHeaderEl.addEventListener('dragover', (e) => {
+				e.preventDefault();
+				groupHeaderEl.addClass('is-drag-over');
+			});
+			groupHeaderEl.addEventListener('dragleave', () => {
+				groupHeaderEl.removeClass('is-drag-over');
+			});
+			groupHeaderEl.addEventListener('drop', (e) => {
+				e.preventDefault();
+				groupHeaderEl.removeClass('is-drag-over');
+				const entryPath = e.dataTransfer?.getData('text/plain');
+				if (!entryPath || !config.groupByProp) return;
+				void this._dropToGroup(entryPath, config.groupByProp, groupLabel);
+			});
 		}
 
 		let rowIndex = 0;
 		group.entries.forEach((entry) => {
 			const dates = entryDatesCache.get(entry) ?? null;
-			// Skip entries entirely outside the render window (no overlap with [min, max])
 			if (dates && (dates.end < min || dates.start > max)) return;
-			this.renderRow(containerEl, entry, config, min, max, rowIndex % 2 === 0, ticks, entryDatesCache);
+			this.renderRow(containerEl, entry, config, min, max, rowIndex % 2 === 0, ticks, entryDatesCache, isGrouped);
 			rowIndex++;
 		});
 	}
 
-	private renderRow(containerEl: HTMLElement, entry: BasesEntry, config: TimelineConfig, min: Date, max: Date, isEven: boolean = false, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>): void {
+	private renderRow(containerEl: HTMLElement, entry: BasesEntry, config: TimelineConfig, min: Date, max: Date, isEven: boolean = false, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>, isGrouped = false): void {
 		const rowEl = containerEl.createDiv({ cls: 'bases-timeline-row' });
 		if (isEven) rowEl.addClass('is-even');
 		rowEl.setAttribute('data-entry-path', entry.file.path);
+
+		// Drag handle — only shown when grouping is active
+		if (isGrouped) {
+			const handle = rowEl.createDiv({ cls: 'bases-timeline-drag-handle', attr: { draggable: 'true', title: 'Drag to move to another group' } });
+			setIcon(handle, 'grip-vertical');
+			handle.addEventListener('dragstart', (e) => {
+				e.dataTransfer?.setData('text/plain', entry.file.path);
+				e.dataTransfer!.effectAllowed = 'move';
+				rowEl.addClass('is-dragging');
+			});
+			handle.addEventListener('dragend', () => {
+				rowEl.removeClass('is-dragging');
+			});
+		}
 
 		const label = this.getEntryLabel(entry, config.labelProp);
 		const labelEl = rowEl.createDiv({ cls: 'bases-timeline-label' });
@@ -1524,6 +1561,30 @@ export class TimelineView extends BasesView {
 		input.focus();
 	}
 
+	/** Write-back handler when a row is dropped onto a group header */
+	private async _dropToGroup(entryPath: string, groupByProp: string, newGroupValue: string): Promise<void> {
+		const file = this.app.vault.getFileByPath(entryPath);
+		if (!file) return;
+
+		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+		const oldValue = String(fm[groupByProp] ?? '');
+		if (oldValue === newGroupValue) return; // dropped onto same group — no-op
+
+		// Push undo record — reuse existing UndoRecord structure with a special marker
+		// We store the group property change in startKey/endKey slots using a sentinel
+		this._pushUndo([{
+			path: entryPath,
+			startKey: groupByProp,
+			endKey: '__group__',
+			before: { start: oldValue, end: '__group__' },
+			after:  { start: newGroupValue, end: '__group__' },
+		}]);
+
+		await this.app.fileManager.processFrontMatter(file, (fmData) => {
+			fmData[groupByProp] = newGroupValue;
+		});
+	}
+
 	private async _exportPng(): Promise<void> {
 		const el = this.bodyEl as HTMLElement;
 		try {
@@ -1675,8 +1736,13 @@ export class TimelineView extends BasesView {
 			if (!file) continue;
 			const target = direction === 'undo' ? e.before : e.after;
 			await this.app.fileManager.processFrontMatter(file, fm => {
-				fm[e.startKey] = target.start;
-				fm[e.endKey]   = target.end;
+				// Group-change records use endKey='__group__' sentinel
+				if (e.endKey === '__group__') {
+					fm[e.startKey] = target.start;
+				} else {
+					fm[e.startKey] = target.start;
+					fm[e.endKey]   = target.end;
+				}
 			});
 		}
 	}

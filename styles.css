@@ -767,7 +767,30 @@
 	font-size: 0.95rem;
 	border-bottom: 1px solid var(--background-modifier-border);
 	padding-bottom: 6px;
+	transition: background 0.1s;
 }
+.bases-timeline-group.is-drag-over {
+	background: var(--background-modifier-hover);
+	border-bottom-color: var(--color-accent);
+	color: var(--color-accent);
+}
+
+/* Row drag handle (group drag-between-groups) */
+.bases-timeline-drag-handle {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	flex-shrink: 0;
+	cursor: grab;
+	opacity: 0;
+	color: var(--text-muted);
+	transition: opacity 0.15s;
+}
+.bases-timeline-row:hover .bases-timeline-drag-handle { opacity: 1; }
+.bases-timeline-drag-handle:active { cursor: grabbing; }
+.bases-timeline-row.is-dragging { opacity: 0.45; }
+
 
 
 .bases-timeline-row {
