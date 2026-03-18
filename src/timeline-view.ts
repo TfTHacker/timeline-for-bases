@@ -1582,9 +1582,12 @@ export class TimelineView extends BasesView {
 		//    to identify which field holds the group key value.
 		let groupByProp = hintProp;
 
-		// Helper: normalise inferred key by stripping Bases' `note.` namespace prefix.
-		// Bases uses `note.property` as a property ID, but the actual YAML key is just `property`.
+		// Helper: strip Bases' `note.` namespace prefix → actual YAML frontmatter key.
+		// Bases stores property IDs as `note.horizon` internally, but the YAML key is `horizon`.
 		const normaliseKey = (k: string) => k.startsWith('note.') ? k.slice(5) : k;
+
+		// Normalise the hint too — it comes directly from Bases config and already has the prefix
+		if (groupByProp) groupByProp = normaliseKey(groupByProp);
 
 		if (!groupByProp && fromGroupValue !== 'Ungrouped') {
 			for (const [k, v] of Object.entries(fm)) {
@@ -1626,7 +1629,6 @@ export class TimelineView extends BasesView {
 
 		try {
 			await this.app.fileManager.processFrontMatter(file, (fmData) => {
-				// Remove any note.-prefixed variant left by old writes
 				delete fmData[`note.${groupByProp!}`];
 				fmData[groupByProp!] = toGroupValue;
 			});
