@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.1.3 
+## 0.1.4 (unreleased)
+
+### Bug Fixes
+- **Drag to Ungrouped removes property** — dragging a note into the Ungrouped section now deletes the group property from frontmatter instead of setting it to the literal string "Ungrouped"
+- **Group drag writes correct frontmatter key** — the `note.` namespace prefix used internally by Bases is now stripped before writing, preventing stale `note.property` keys from being created in the file
+- **Drag-to-group works for ungrouped notes** — notes with no group value can now be dragged into a named group; the correct property is inferred from other entries in the view
+
+## 0.1.3
 
 ### Performance
 Significant rendering improvements were made to reduce DOM overhead, minimize redundant work, and keep the UI responsive with large datasets.
