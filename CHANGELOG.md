@@ -16,6 +16,9 @@ Significant rendering improvements were made to reduce DOM overhead, minimize re
 - **Inline label editing** — a pencil icon appears on row hover; clicking it makes the task name editable inline; Enter saves, Escape cancels
 - **Day separator lines** — faint vertical lines mark each day column boundary on day scale for easier visual alignment
 - **Create Sample Base** — Settings tab button creates a "Timeline Sample" folder with 10 family vacation planning tasks (dated from today) and a ready-to-use base with color-coded priorities (High/Medium/Low)
+- **Right-click context menu** — right-click any bar to open, edit dates, duplicate, or delete the task
+- **Multi-select** — Shift+click bars to select multiple; dragging any selected bar moves all of them together by the same delta; Esc clears selection
+- **Undo / redo** — Ctrl+Z undoes the last drag, resize, or date edit; Ctrl+Y redoes; also available as toolbar buttons; history depth 50
 - **Single-click label opens note** — clicking a task label opens the note; double-clicking a bar also opens it; accidental opens after drag are suppressed
 - **Span-based axis labels** — month, quarter, and year context headers now fill their full slot width as solid label spans rather than floating point labels
 - **Week view tail extension** — auto-fit week view adds 2 extra tail weeks beyond the last task for breathing room
