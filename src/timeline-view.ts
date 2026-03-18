@@ -1682,7 +1682,11 @@ export class TimelineView extends BasesView {
 		try {
 			await this.app.fileManager.processFrontMatter(file, (fmData) => {
 				delete fmData[`note.${groupByProp!}`];
-				fmData[groupByProp!] = toGroupValue;
+				if (toGroupValue === 'Ungrouped') {
+					delete fmData[groupByProp!]; // remove property entirely → note becomes ungrouped
+				} else {
+					fmData[groupByProp!] = toGroupValue;
+				}
 			});
 		} catch (err) {
 			new Notice(`Timeline: failed to write frontmatter — ${err}`);
