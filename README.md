@@ -47,6 +47,10 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 - **Drag between groups** — grab the grip handle on any row and drop it into another group to reassign it; the note's frontmatter is updated automatically
 - **Undo support** — group changes are undoable like any other edit
 
+**Working with dates**
+- **Draw to create** — on rows with no dates, click and drag in the track area to draw a bar; start and end dates are written to the note on release
+- **Clear dates** — right-click any bar → "Clear dates" to remove the dates from the note; the row goes back to dateless state
+
 **Editing**
 - **Inline label editing** — pencil icon appears on row hover; click to rename the task in place
 - **Undo / redo** — Ctrl+Z / Ctrl+Y (also toolbar buttons); 50-step history covers all edits including group changes

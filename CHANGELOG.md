@@ -19,6 +19,8 @@ Significant rendering improvements were made to reduce DOM overhead, minimize re
 - **Right-click context menu** — right-click any bar to open, edit dates, duplicate, or delete the task
 - **Multi-select** — Shift+click bars to select multiple; dragging any selected bar moves all of them together by the same delta; Esc clears selection
 - **Drag between groups** — when the Bases view is grouped by a property, a grip handle appears on each row; drag it to any row or group header in another group to reassign the note to that group (frontmatter is updated on drop, fully undoable)
+- **Draw to create dates** — on rows with no dates, the track area shows a crosshair cursor; click and drag to draw a bar and set the start/end dates directly in the note's frontmatter; respects whatever date properties are configured in the view
+- **Clear dates** — right-click any bar → "Clear dates" removes the start and end date from the note's frontmatter; the bar disappears and the row returns to dateless state; undoable
 - **Undo / redo** — Ctrl+Z undoes the last drag, resize, or date edit; Ctrl+Y redoes; also available as toolbar buttons; history depth 50
 - **Single-click label opens note** — clicking a task label opens the note; double-clicking a bar also opens it; accidental opens after drag are suppressed
 - **Span-based axis labels** — month, quarter, and year context headers now fill their full slot width as solid label spans rather than floating point labels
