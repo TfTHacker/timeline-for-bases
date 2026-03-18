@@ -1,7 +1,7 @@
 {
 	"id": "timeline-for-bases",
 	"name": "Timeline for Bases",
-	"version": "0.1.3",
+	"version": "0.1.4",
 	"minAppVersion": "1.10.0",
 	"description": "A Gantt-style timeline view for Bases. Visualize, drag, resize, and edit task dates directly on the grid.",
 	"author": "TfTHacker",
