@@ -40,6 +40,7 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 - **Resize** — drag the left or right edge of a bar to adjust start or end date independently
 - **Multi-select** — Shift+click to select multiple bars; drag any selected bar to move them all together
 - **Right-click context menu** — Open, Edit dates, Duplicate, or Delete directly from the bar
+- **Drag between groups** — when the view is grouped, a grip handle appears on each row; drag to any row or group header to reassign the note's group property (frontmatter updated, undoable)
 - **Hover preview** — hovering a bar or label shows Obsidian's native page preview popup
 - **Double-click bar** — opens the note; single-click the label also opens it
 

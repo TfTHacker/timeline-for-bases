@@ -18,6 +18,7 @@ Significant rendering improvements were made to reduce DOM overhead, minimize re
 - **Create Sample Base** — Settings tab button creates a "Timeline Sample" folder with 10 family vacation planning tasks (dated from today) and a ready-to-use base with color-coded priorities (High/Medium/Low)
 - **Right-click context menu** — right-click any bar to open, edit dates, duplicate, or delete the task
 - **Multi-select** — Shift+click bars to select multiple; dragging any selected bar moves all of them together by the same delta; Esc clears selection
+- **Drag between groups** — when the Bases view is grouped by a property, a grip handle appears on each row; drag it to any row or group header in another group to reassign the note to that group (frontmatter is updated on drop, fully undoable)
 - **Undo / redo** — Ctrl+Z undoes the last drag, resize, or date edit; Ctrl+Y redoes; also available as toolbar buttons; history depth 50
 - **Single-click label opens note** — clicking a task label opens the note; double-clicking a bar also opens it; accidental opens after drag are suppressed
 - **Span-based axis labels** — month, quarter, and year context headers now fill their full slot width as solid label spans rather than floating point labels

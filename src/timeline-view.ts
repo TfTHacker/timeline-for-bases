@@ -1347,6 +1347,26 @@ export class TimelineView extends BasesView {
 			handle.addEventListener('dragend', () => {
 				rowEl.removeClass('is-dragging');
 			});
+
+			// Make the row itself a drop target (any row in another group works)
+			rowEl.addEventListener('dragover', (e) => {
+				const raw = e.dataTransfer?.types.includes('text/plain');
+				if (!raw) return;
+				e.preventDefault();
+				rowEl.addClass('is-drop-target');
+			});
+			rowEl.addEventListener('dragleave', () => rowEl.removeClass('is-drop-target'));
+			rowEl.addEventListener('drop', (e) => {
+				e.preventDefault();
+				rowEl.removeClass('is-drop-target');
+				const data = e.dataTransfer?.getData('text/plain');
+				if (!data) return;
+				try {
+					const { path, fromGroup } = JSON.parse(data) as { path: string; fromGroup: string };
+					if (path === entry.file.path) return; // dropped onto itself
+					void this._dropToGroup(path, fromGroup, currentGroupLabel!, config.groupByProp);
+				} catch { /* ignore */ }
+			});
 		}
 
 		const label = this.getEntryLabel(entry, config.labelProp);

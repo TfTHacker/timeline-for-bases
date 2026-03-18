@@ -790,6 +790,7 @@
 .bases-timeline-row:hover .bases-timeline-drag-handle { opacity: 1; }
 .bases-timeline-drag-handle:active { cursor: grabbing; }
 .bases-timeline-row.is-dragging { opacity: 0.45; }
+.bases-timeline-row.is-drop-target { outline: 1px dashed var(--color-accent); background: var(--background-modifier-hover); }
 
 
 
