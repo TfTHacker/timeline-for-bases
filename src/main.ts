@@ -25,12 +25,16 @@ export default class TimelinePlugin extends Plugin {
 	}
 
 	async createSampleBase(): Promise<void> {
-		const folder = 'Timeline Sample';
-		const basePath = normalizePath(`${folder}/Family Vacation Planning.base`);
+		const folder     = 'Timeline Sample';
+		const notesFolder = `${folder}/Notes`;
+		const basePath   = normalizePath(`${folder}/Family Vacation Planning.base`);
 
-		// Create folder
+		// Create folders
 		if (!await this.app.vault.adapter.exists(folder)) {
 			await this.app.vault.createFolder(folder);
+		}
+		if (!await this.app.vault.adapter.exists(notesFolder)) {
+			await this.app.vault.createFolder(notesFolder);
 		}
 
 		// Generate 10 vacation planning tasks relative to today
@@ -54,7 +58,7 @@ export default class TimelinePlugin extends Plugin {
 		for (const task of tasks) {
 			const startDate = addDays(today, task.start);
 			const endDate = addDays(today, task.start + task.duration);
-			const filePath = normalizePath(`${folder}/${task.name}.md`);
+			const filePath = normalizePath(`${notesFolder}/${task.name}.md`);
 			const content = `---\nstart: ${fmt(startDate)}\nend: ${fmt(endDate)}\npriority: ${task.priority}\nstatus: open\n---\n\n# ${task.name}\n`;
 			if (!await this.app.vault.adapter.exists(filePath)) {
 				await this.app.vault.create(filePath, content);
@@ -70,7 +74,7 @@ views:
     name: Family Vacation Planning
     filters:
       and:
-        - file.folder == "${folder}"
+        - file.folder == "${notesFolder}"
     sort:
       - property: start
         direction: ASC
