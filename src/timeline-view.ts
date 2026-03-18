@@ -1606,7 +1606,7 @@ export class TimelineView extends BasesView {
 		}
 
 		if (!groupByProp) {
-			new Notice('Timeline: could not determine which property to update — check group-by field');
+			new Notice('Timeline: could not determine group property — drag-to-group requires at least one other non-empty group');
 			return;
 		}
 
@@ -1620,9 +1620,14 @@ export class TimelineView extends BasesView {
 			after:  { start: toGroupValue, end: '__group__' },
 		}]);
 
-		await this.app.fileManager.processFrontMatter(file, (fmData) => {
-			fmData[groupByProp!] = toGroupValue;
-		});
+		try {
+			await this.app.fileManager.processFrontMatter(file, (fmData) => {
+				fmData[groupByProp!] = toGroupValue;
+			});
+
+		} catch (err) {
+			new Notice(`Timeline: failed to write frontmatter — ${err}`);
+		}
 	}
 
 	private async _exportPng(): Promise<void> {
