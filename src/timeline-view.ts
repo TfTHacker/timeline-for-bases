@@ -1494,15 +1494,14 @@ export class TimelineView extends BasesView {
 		const input = popover.createEl('input', { type: 'date' });
 		input.value = this._fmtDate(new Date());
 
-		const jump = () => {
+		const go = popover.createEl('button', { cls: 'mod-cta', text: 'Go' });
+		go.addEventListener('click', () => {
 			const d = new Date(input.value + 'T00:00:00');
-			if (!isNaN(d.getTime())) { this._scrollToDate(d); popover.remove(); }
-		};
-
-		// Jump immediately on date selection (covers native calendar picker click)
-		input.addEventListener('change', jump);
+			if (!isNaN(d.getTime())) this._scrollToDate(d);
+			popover.remove();
+		});
 		input.addEventListener('keydown', (e: KeyboardEvent) => {
-			if (e.key === 'Enter') jump();
+			if (e.key === 'Enter') go.click();
 			if (e.key === 'Escape') popover.remove();
 		});
 
