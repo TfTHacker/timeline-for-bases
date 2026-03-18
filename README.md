@@ -43,11 +43,9 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 - **Hover preview** — hovering a bar or label shows Obsidian's native page preview popup
 - **Double-click bar** — opens the note; single-click the label also opens it
 
-**Bases Groups**
-- **Group support** — when the Bases view is configured with a group-by property, the timeline renders rows under labeled group headers
-- **Drag between groups** — a grip handle appears on each row when grouping is active; drag it to any row or group header in a different group to reassign the note to that group
-- **Frontmatter write-back** — the group property is updated directly in the note's frontmatter on drop; no manual editing needed
-- **Undo support** — group reassignments are fully undoable via Ctrl+Z or the Undo toolbar button
+**Groups**
+- **Drag between groups** — grab the grip handle on any row and drop it into another group to reassign it; the note's frontmatter is updated automatically
+- **Undo support** — group changes are undoable like any other edit
 
 **Editing**
 - **Inline label editing** — pencil icon appears on row hover; click to rename the task in place
