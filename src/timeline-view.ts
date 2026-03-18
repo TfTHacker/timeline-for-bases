@@ -1293,14 +1293,14 @@ export class TimelineView extends BasesView {
 
 	private renderGroup(containerEl: HTMLElement, group: BasesEntryGroup, config: TimelineConfig, min: Date, max: Date, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>): void {
 		const isGrouped = config.groupByProp !== null && (this.data.groupedData.length > 1 || group.hasKey());
+		const groupLabel = (group.key && !Value.equals(group.key, NullValue.value))
+			? group.key.toString()
+			: 'Ungrouped';
+
 		if (isGrouped) {
-			const groupLabel = group.key && !Value.equals(group.key, NullValue.value)
-				? group.key.toString()
-				: 'Ungrouped';
 			const groupHeaderEl = containerEl.createDiv({ cls: 'bases-timeline-group', text: groupLabel });
 
 			// Make the group header a drop target
-			groupHeaderEl.setAttribute('data-group-value', groupLabel);
 			groupHeaderEl.addEventListener('dragover', (e) => {
 				e.preventDefault();
 				groupHeaderEl.addClass('is-drag-over');
@@ -1311,9 +1311,12 @@ export class TimelineView extends BasesView {
 			groupHeaderEl.addEventListener('drop', (e) => {
 				e.preventDefault();
 				groupHeaderEl.removeClass('is-drag-over');
-				const entryPath = e.dataTransfer?.getData('text/plain');
-				if (!entryPath || !config.groupByProp) return;
-				void this._dropToGroup(entryPath, config.groupByProp, groupLabel);
+				const raw = e.dataTransfer?.getData('text/plain');
+				if (!raw) return;
+				try {
+					const { path, fromGroup } = JSON.parse(raw) as { path: string; fromGroup: string };
+					void this._dropToGroup(path, fromGroup, groupLabel, config.groupByProp);
+				} catch { /* ignore malformed drag data */ }
 			});
 		}
 
@@ -1321,22 +1324,25 @@ export class TimelineView extends BasesView {
 		group.entries.forEach((entry) => {
 			const dates = entryDatesCache.get(entry) ?? null;
 			if (dates && (dates.end < min || dates.start > max)) return;
-			this.renderRow(containerEl, entry, config, min, max, rowIndex % 2 === 0, ticks, entryDatesCache, isGrouped);
+			this.renderRow(containerEl, entry, config, min, max, rowIndex % 2 === 0, ticks, entryDatesCache, isGrouped ? groupLabel : null);
 			rowIndex++;
 		});
 	}
 
-	private renderRow(containerEl: HTMLElement, entry: BasesEntry, config: TimelineConfig, min: Date, max: Date, isEven: boolean = false, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>, isGrouped = false): void {
+	private renderRow(containerEl: HTMLElement, entry: BasesEntry, config: TimelineConfig, min: Date, max: Date, isEven: boolean = false, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>, currentGroupLabel: string | null = null): void {
 		const rowEl = containerEl.createDiv({ cls: 'bases-timeline-row' });
 		if (isEven) rowEl.addClass('is-even');
 		rowEl.setAttribute('data-entry-path', entry.file.path);
 
 		// Drag handle — only shown when grouping is active
-		if (isGrouped) {
+		if (currentGroupLabel !== null) {
 			const handle = rowEl.createDiv({ cls: 'bases-timeline-drag-handle', attr: { draggable: 'true', title: 'Drag to move to another group' } });
 			setIcon(handle, 'grip-vertical');
 			handle.addEventListener('dragstart', (e) => {
-				e.dataTransfer?.setData('text/plain', entry.file.path);
+				// Encode both the entry path and its current group so the drop
+				// handler can infer which frontmatter field to update.
+				const payload = JSON.stringify({ path: entry.file.path, fromGroup: currentGroupLabel });
+				e.dataTransfer?.setData('text/plain', payload);
 				e.dataTransfer!.effectAllowed = 'move';
 				rowEl.addClass('is-dragging');
 			});
@@ -1562,26 +1568,46 @@ export class TimelineView extends BasesView {
 	}
 
 	/** Write-back handler when a row is dropped onto a group header */
-	private async _dropToGroup(entryPath: string, groupByProp: string, newGroupValue: string): Promise<void> {
+	private async _dropToGroup(entryPath: string, fromGroupValue: string, toGroupValue: string, hintProp: string | null): Promise<void> {
+		if (fromGroupValue === toGroupValue) return;
+
 		const file = this.app.vault.getFileByPath(entryPath);
 		if (!file) return;
 
 		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
-		const oldValue = String(fm[groupByProp] ?? '');
-		if (oldValue === newGroupValue) return; // dropped onto same group — no-op
 
-		// Push undo record — reuse existing UndoRecord structure with a special marker
-		// We store the group property change in startKey/endKey slots using a sentinel
+		// Determine the group-by property:
+		// 1. Use the hint from config if available.
+		// 2. Otherwise infer it by finding which frontmatter field matches the
+		//    current group value — reliable for simple string/select properties.
+		let groupByProp = hintProp;
+		if (!groupByProp) {
+			for (const [k, v] of Object.entries(fm)) {
+				if (k === 'position') continue;
+				if (String(v ?? '') === fromGroupValue) {
+					groupByProp = k;
+					break;
+				}
+			}
+		}
+
+		if (!groupByProp) {
+			new Notice('Timeline: could not determine which property to update — check group-by field');
+			return;
+		}
+
+		const oldValue = String(fm[groupByProp] ?? '');
+
 		this._pushUndo([{
 			path: entryPath,
 			startKey: groupByProp,
 			endKey: '__group__',
 			before: { start: oldValue, end: '__group__' },
-			after:  { start: newGroupValue, end: '__group__' },
+			after:  { start: toGroupValue, end: '__group__' },
 		}]);
 
 		await this.app.fileManager.processFrontMatter(file, (fmData) => {
-			fmData[groupByProp] = newGroupValue;
+			fmData[groupByProp!] = toGroupValue;
 		});
 	}
 
