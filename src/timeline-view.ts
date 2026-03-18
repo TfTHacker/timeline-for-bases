@@ -94,8 +94,7 @@ export class TimelineView extends BasesView {
 	private _rangeMax: Date | null = null;
 	private _lastConfig: TimelineConfig | null = null;
 
-	// Path of a newly created note that should auto-start inline editing
-	private _pendingEditPath: string | null = null;
+
 
 	// Multi-select
 	private _selectedPaths = new Set<string>();
@@ -103,6 +102,8 @@ export class TimelineView extends BasesView {
 	// Undo / redo
 	private _undoStack: UndoRecord[] = [];
 	private _redoStack: UndoRecord[] = [];
+	private _undoBtn: HTMLButtonElement | null = null;
+	private _redoBtn: HTMLButtonElement | null = null;
 
 	private _dragState: DragState | null = null;
 	private _dragTooltipEl: HTMLElement | null = null;
@@ -286,33 +287,28 @@ export class TimelineView extends BasesView {
 		const rightEl = this.headerEl.createDiv({ cls: 'bases-timeline-header-right' });
 
 		// Undo / redo buttons
-		const undoBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Undo (Ctrl+Z)' } });
+		const undoBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Undo (Ctrl+Z)' } }) as HTMLButtonElement;
 		setIcon(undoBtn, 'undo');
+		undoBtn.disabled = this._undoStack.length === 0;
+		this._undoBtn = undoBtn;
 		undoBtn.addEventListener('click', () => {
 			const record = this._undoStack.pop();
 			if (!record) return;
 			this._redoStack.push(record);
 			void this._applyUndoRecord(record, 'undo');
+			this._refreshUndoRedoState();
 		});
 
-		const redoBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Redo (Ctrl+Y)' } });
+		const redoBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Redo (Ctrl+Y)' } }) as HTMLButtonElement;
 		setIcon(redoBtn, 'redo');
+		redoBtn.disabled = this._redoStack.length === 0;
+		this._redoBtn = redoBtn;
 		redoBtn.addEventListener('click', () => {
 			const record = this._redoStack.pop();
 			if (!record) return;
 			this._undoStack.push(record);
 			void this._applyUndoRecord(record, 'redo');
-		});
-
-		// Add task button
-		const addBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn', attr: { 'aria-label': 'Add a new task note' } });
-		setIcon(addBtn.createSpan({ cls: 'nav-icon' }), 'plus');
-		addBtn.createSpan({ text: 'Add' });
-		addBtn.addEventListener('click', () => {
-			this._addTask(config).catch(err => {
-				console.error('[Timeline] _addTask failed:', err);
-				new Notice(`Timeline: failed to add task — ${err?.message ?? err}`);
-			});
+			this._refreshUndoRedoState();
 		});
 
 		// Export PNG button
@@ -1317,9 +1313,7 @@ export class TimelineView extends BasesView {
 			});
 		});
 
-		// Auto inline-edit for newly added tasks
-		const isNewEntry = this._pendingEditPath === entry.file.path;
-		if (isNewEntry) this._pendingEditPath = null;
+
 
 		// Inline edit: pencil icon appears on hover → click to edit
 		const labelPropKey = config.labelProp ? String(config.labelProp).replace(/^note\./, '') : null;
@@ -1327,14 +1321,6 @@ export class TimelineView extends BasesView {
 			const editBtn = labelEl.createEl('button', { cls: 'bases-timeline-label-edit-btn' });
 			setIcon(editBtn, 'pencil');
 			editBtn.setAttribute('aria-label', 'Edit name');
-
-			// Auto-trigger edit for newly added note
-			if (isNewEntry) {
-				setTimeout(() => {
-					rowEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-					editBtn.click();
-				}, 80);
-			}
 
 			editBtn.addEventListener('click', (e: MouseEvent) => {
 				e.stopPropagation(); e.preventDefault();
@@ -1532,73 +1518,6 @@ export class TimelineView extends BasesView {
 		input.focus();
 	}
 
-	private async _addTask(config: TimelineConfig): Promise<void> {
-		const today    = new Date();
-		const startStr = this._fmtDate(today);
-
-		const startKey = config.startDateProp ? String(config.startDateProp).replace(/^note\./, '') : 'start';
-		const endKey   = config.endDateProp   ? String(config.endDateProp).replace(/^note\./, '')   : 'end';
-		const labelKey = config.labelProp     ? String(config.labelProp).replace(/^note\./, '')      : null;
-		const taskName = 'New task';
-
-		// Target folder: use the folder of the first visible entry so the new
-		// note always lands in the same folder the current view is showing,
-		// regardless of any plugin's own folder setting.
-		const entries = (this.data.groupedData || []).flatMap((g: BasesEntryGroup) => g.entries);
-		const folder  = entries.length > 0 ? (entries[0].file.parent?.path ?? '') : '';
-
-		// Build frontmatter ────────────────────────────────────────────────────
-		// If TaskNotes is installed, seed defaults from its settings so the new
-		// note gets the right status, priority, and identification tag.
-		// Otherwise clone the structure from the first visible entry.
-		const fm: Record<string, unknown> = {};
-
-		const tnSettings = (this.app as any).plugins?.plugins?.['tasknotes']?.settings;
-		if (tnSettings) {
-			if (tnSettings.defaultTaskStatus)   fm['status']   = tnSettings.defaultTaskStatus;
-			if (tnSettings.defaultTaskPriority) fm['priority'] = tnSettings.defaultTaskPriority;
-			if (tnSettings.taskIdentificationMethod === 'tag' && tnSettings.taskTag) {
-				fm['tags'] = [tnSettings.taskTag];
-			}
-		} else if (entries.length > 0) {
-			const cached = this.app.metadataCache.getFileCache(entries[0].file)?.frontmatter ?? {};
-			for (const key of Object.keys(cached)) {
-				if (key === startKey || key === endKey || key === 'position') continue;
-				const val = cached[key];
-				if (typeof val === 'boolean') fm[key] = false;
-				else if (typeof val === 'number') fm[key] = 0;
-				else if (Array.isArray(val))      fm[key] = [];
-				else                              fm[key] = '';
-			}
-		}
-
-		// Date fields and label
-		fm[startKey] = startStr;
-		fm[endKey]   = startStr;
-		if (labelKey && labelKey !== 'title') fm[labelKey] = taskName;
-
-		// Build YAML string
-		const toYaml = (v: unknown): string => {
-			if (Array.isArray(v)) return `[${(v as string[]).map(s => `"${s}"`).join(', ')}]`;
-			if (typeof v === 'boolean' || typeof v === 'number') return String(v);
-			return String(v ?? '');
-		};
-		const yamlLines = Object.entries(fm).map(([k, v]) => `${k}: ${toYaml(v)}`).join('\n');
-
-		// Unique filename in target folder
-		let fileName = `${taskName} ${startStr}`;
-		let filePath  = folder ? `${folder}/${fileName}.md` : `${fileName}.md`;
-		let n = 1;
-		while (await this.app.vault.adapter.exists(filePath)) {
-			fileName = `${taskName} ${startStr} ${n++}`;
-			filePath  = folder ? `${folder}/${fileName}.md` : `${fileName}.md`;
-		}
-
-		const content = `---\n${yamlLines}\n---\n\n`;
-		const file    = await this.app.vault.create(filePath, content);
-		this._pendingEditPath = file.path;
-	}
-
 	private async _exportPng(): Promise<void> {
 		const el = this.bodyEl as HTMLElement;
 		try {
@@ -1734,8 +1653,14 @@ export class TimelineView extends BasesView {
 
 	private _pushUndo(entries: UndoRecord['entries']): void {
 		this._undoStack.push({ entries });
-		this._redoStack = []; // new action clears redo
+		this._redoStack = [];
 		if (this._undoStack.length > 50) this._undoStack.shift();
+		this._refreshUndoRedoState();
+	}
+
+	private _refreshUndoRedoState(): void {
+		if (this._undoBtn) this._undoBtn.disabled = this._undoStack.length === 0;
+		if (this._redoBtn) this._redoBtn.disabled = this._redoStack.length === 0;
 	}
 
 	private async _applyUndoRecord(record: UndoRecord, direction: 'undo' | 'redo'): Promise<void> {
@@ -1758,12 +1683,14 @@ export class TimelineView extends BasesView {
 			if (!record) return;
 			this._redoStack.push(record);
 			void this._applyUndoRecord(record, 'undo');
+			this._refreshUndoRedoState();
 		} else if (ctrl && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
 			e.preventDefault();
 			const record = this._redoStack.pop();
 			if (!record) return;
 			this._undoStack.push(record);
 			void this._applyUndoRecord(record, 'redo');
+			this._refreshUndoRedoState();
 		} else if (e.key === 'Escape') {
 			this._clearSelection();
 		}

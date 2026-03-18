@@ -162,7 +162,12 @@
 	justify-content: center;
 }
 .bases-timeline-nav-btn.is-icon-only svg { width: 14px; height: 14px; }
-.bases-timeline-nav-btn:hover { background: var(--background-secondary-alt); }
+.bases-timeline-nav-btn:hover:not(:disabled) { background: var(--background-secondary-alt); }
+.bases-timeline-nav-btn:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+	pointer-events: none;
+}
 .bases-timeline-nav-btn .nav-icon { display: flex; align-items: center; }
 .bases-timeline-nav-btn .nav-icon svg { width: 13px; height: 13px; }
 
