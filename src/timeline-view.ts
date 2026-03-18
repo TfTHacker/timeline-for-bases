@@ -1339,8 +1339,6 @@ export class TimelineView extends BasesView {
 			const handle = rowEl.createDiv({ cls: 'bases-timeline-drag-handle', attr: { draggable: 'true', title: 'Drag to move to another group' } });
 			setIcon(handle, 'grip-vertical');
 			handle.addEventListener('dragstart', (e) => {
-				// Encode both the entry path and its current group so the drop
-				// handler can infer which frontmatter field to update.
 				const payload = JSON.stringify({ path: entry.file.path, fromGroup: currentGroupLabel });
 				e.dataTransfer?.setData('text/plain', payload);
 				e.dataTransfer!.effectAllowed = 'move';
@@ -1577,16 +1575,32 @@ export class TimelineView extends BasesView {
 		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
 
 		// Determine the group-by property:
-		// 1. Use the hint from config if available.
-		// 2. Otherwise infer it by finding which frontmatter field matches the
-		//    current group value — reliable for simple string/select properties.
+		// 1. Hint from config (usually null since Bases doesn't expose it).
+		// 2. Match the entry's own frontmatter value against its current group label.
+		//    Works when the entry is in a named group (non-empty value).
+		// 3. Fallback for "Ungrouped" entries: scan entries in other named groups
+		//    to identify which field holds the group key value.
 		let groupByProp = hintProp;
-		if (!groupByProp) {
+
+		if (!groupByProp && fromGroupValue !== 'Ungrouped') {
 			for (const [k, v] of Object.entries(fm)) {
 				if (k === 'position') continue;
-				if (String(v ?? '') === fromGroupValue) {
-					groupByProp = k;
-					break;
+				if (String(v ?? '') === fromGroupValue) { groupByProp = k; break; }
+			}
+		}
+
+		if (!groupByProp) {
+			// Scan named groups to find which frontmatter field matches their key
+			outer: for (const grp of this.data.groupedData) {
+				if (!grp.hasKey()) continue;
+				const grpLabel = grp.key?.toString() ?? '';
+				if (!grpLabel) continue;
+				for (const candidate of grp.entries.slice(0, 5)) {
+					const cfm = this.app.metadataCache.getFileCache(candidate.file)?.frontmatter ?? {};
+					for (const [k, v] of Object.entries(cfm)) {
+						if (k === 'position') continue;
+						if (String(v ?? '') === grpLabel) { groupByProp = k; break outer; }
+					}
 				}
 			}
 		}
