@@ -1761,6 +1761,23 @@ export class TimelineView extends BasesView {
 		menu.addSeparator();
 
 		menu.addItem(item => item
+			.setTitle('Clear dates')
+			.setIcon('calendar-x')
+			.onClick(async () => {
+				const oldStart = this._fmtDate(currentStart);
+				const oldEnd   = this._fmtDate(currentEnd);
+				this._pushUndo([{
+					path: entry.file.path, startKey, endKey,
+					before: { start: oldStart, end: oldEnd },
+					after:  { start: '', end: '' },
+				}]);
+				await this.app.fileManager.processFrontMatter(entry.file, (fm) => {
+					delete fm[startKey];
+					delete fm[endKey];
+				});
+			}));
+
+		menu.addItem(item => item
 			.setTitle('Delete')
 			.setIcon('trash')
 			.onClick(async () => {
