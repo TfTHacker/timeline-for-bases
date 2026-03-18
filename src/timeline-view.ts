@@ -1626,9 +1626,10 @@ export class TimelineView extends BasesView {
 
 		try {
 			await this.app.fileManager.processFrontMatter(file, (fmData) => {
+				// Remove any note.-prefixed variant left by old writes
+				delete fmData[`note.${groupByProp!}`];
 				fmData[groupByProp!] = toGroupValue;
 			});
-
 		} catch (err) {
 			new Notice(`Timeline: failed to write frontmatter — ${err}`);
 		}
