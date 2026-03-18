@@ -1528,62 +1528,85 @@ export class TimelineView extends BasesView {
 	}
 
 	private async _addTask(config: TimelineConfig): Promise<void> {
-		const today = new Date();
-		const start = this._fmtDate(today);
-		const end   = this._fmtDate(today);
+		const today    = new Date();
+		const startStr = this._fmtDate(today);
 
 		const startKey = config.startDateProp ? String(config.startDateProp).replace(/^note\./, '') : 'start';
 		const endKey   = config.endDateProp   ? String(config.endDateProp).replace(/^note\./, '')   : 'end';
 		const labelKey = config.labelProp     ? String(config.labelProp).replace(/^note\./, '')      : null;
+		const taskName = 'New task';
 
-		// Determine target folder from first visible entry
-		const entries = (this.data.groupedData || []).flatMap((g: BasesEntryGroup) => g.entries);
-		const folder  = entries.length > 0 ? (entries[0].file.parent?.path ?? '') : '';
+		// ── TaskNotes integration ─────────────────────────────────────────────
+		// If the TaskNotes plugin is installed, delegate creation to its service
+		// so that all defaults (status, priority, folder, tags, template, etc.)
+		// are applied exactly as the user has configured TaskNotes.
+		const tnPlugin = (this.app as any).plugins?.plugins?.['tasknotes'];
+		const tnService = tnPlugin?.taskService;
 
-		// Smart template: clone frontmatter keys from first existing entry
-		// (detects TaskNotes-style notes — status, priority, etc. — automatically)
-		const fm: Record<string, string> = {};
-		if (entries.length > 0) {
-			const tmpl = entries[0].file;
-			const cached = this.app.metadataCache.getFileCache(tmpl)?.frontmatter ?? {};
-			for (const key of Object.keys(cached)) {
-				if (key === startKey || key === endKey) continue;
-				// Skip internal Obsidian cache key
-				if (key === 'position') continue;
-				// Use empty string as default; preserve known value types
-				const val = cached[key];
-				if (typeof val === 'boolean') fm[key] = 'false';
-				else if (typeof val === 'number') fm[key] = '0';
-				else if (Array.isArray(val)) fm[key] = '[]';
-				else fm[key] = '';
+		if (tnService) {
+			// Build the minimal task data. Map our date props to TaskNotes fields
+			// where they match; anything else goes into customFrontmatter.
+			const taskData: Record<string, any> = {
+				title: taskName,
+				creationContext: 'api',
+			};
+
+			// Standard TaskNotes date fields
+			const TN_DATE_FIELDS = ['due', 'scheduled'];
+			if (TN_DATE_FIELDS.includes(startKey)) taskData[startKey] = startStr;
+			else taskData.customFrontmatter = { ...taskData.customFrontmatter, [startKey]: startStr };
+
+			if (TN_DATE_FIELDS.includes(endKey) && endKey !== startKey)
+				taskData[endKey] = startStr;
+			else if (!TN_DATE_FIELDS.includes(endKey))
+				taskData.customFrontmatter = { ...taskData.customFrontmatter, [endKey]: startStr };
+
+			// Fallback: ensure at least one date field is set
+			if (!taskData.due && !taskData.scheduled) taskData.due = startStr;
+
+			try {
+				const result = await tnService.createTask(taskData);
+				this._pendingEditPath = result.file.path;
+				return;
+			} catch (err) {
+				console.warn('[Timeline] TaskNotes createTask failed, falling back to generic create:', err);
+				// fall through to generic path
 			}
 		}
 
-		// Set date fields
-		fm[startKey] = start;
-		fm[endKey]   = end;
+		// ── Generic path ──────────────────────────────────────────────────────
+		const entries = (this.data.groupedData || []).flatMap((g: BasesEntryGroup) => g.entries);
+		const folder  = entries.length > 0 ? (entries[0].file.parent?.path ?? '') : '';
 
-		// Find unique filename
-		const taskName = 'New task';
-		let fileName = `${taskName} ${start}`;
-		let filePath = folder ? `${folder}/${fileName}.md` : `${fileName}.md`;
-		let n = 1;
-		while (await this.app.vault.adapter.exists(filePath)) {
-			fileName = `${taskName} ${start} ${n++}`;
-			filePath = folder ? `${folder}/${fileName}.md` : `${fileName}.md`;
+		// Clone frontmatter structure from first visible entry
+		const fm: Record<string, string> = {};
+		if (entries.length > 0) {
+			const cached = this.app.metadataCache.getFileCache(entries[0].file)?.frontmatter ?? {};
+			for (const key of Object.keys(cached)) {
+				if (key === startKey || key === endKey || key === 'position') continue;
+				const val = cached[key];
+				if (typeof val === 'boolean') fm[key] = 'false';
+				else if (typeof val === 'number') fm[key] = '0';
+				else if (Array.isArray(val))      fm[key] = '[]';
+				else                              fm[key] = '';
+			}
 		}
 
-		// If the label property is the note title, put it in frontmatter too
-		const labelFmKey = (labelKey && labelKey !== 'title') ? labelKey : null;
-		if (labelFmKey) fm[labelFmKey] = taskName;
+		fm[startKey] = startStr;
+		fm[endKey]   = startStr;
+		if (labelKey && labelKey !== 'title') fm[labelKey] = taskName;
 
-		// Build YAML frontmatter
+		let fileName = `${taskName} ${startStr}`;
+		let filePath  = folder ? `${folder}/${fileName}.md` : `${fileName}.md`;
+		let n = 1;
+		while (await this.app.vault.adapter.exists(filePath)) {
+			fileName = `${taskName} ${startStr} ${n++}`;
+			filePath  = folder ? `${folder}/${fileName}.md` : `${fileName}.md`;
+		}
+
 		const yamlLines = Object.entries(fm).map(([k, v]) => `${k}: ${v}`).join('\n');
-		const content = `---\n${yamlLines}\n---\n\n`;
-
-		const file = await this.app.vault.create(filePath, content);
-
-		// Flag for auto inline-edit after grid re-renders
+		const content   = `---\n${yamlLines}\n---\n\n`;
+		const file      = await this.app.vault.create(filePath, content);
 		this._pendingEditPath = file.path;
 	}
 
