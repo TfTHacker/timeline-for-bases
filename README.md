@@ -40,14 +40,18 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 - **Resize** — drag the left or right edge of a bar to adjust start or end date independently
 - **Multi-select** — Shift+click to select multiple bars; drag any selected bar to move them all together
 - **Right-click context menu** — Open, Edit dates, Duplicate, or Delete directly from the bar
-- **Drag between groups** — when the view is grouped, a grip handle appears on each row; drag to any row or group header to reassign the note's group property (frontmatter updated, undoable)
 - **Hover preview** — hovering a bar or label shows Obsidian's native page preview popup
 - **Double-click bar** — opens the note; single-click the label also opens it
 
+**Bases Groups**
+- **Group support** — when the Bases view is configured with a group-by property, the timeline renders rows under labeled group headers
+- **Drag between groups** — a grip handle appears on each row when grouping is active; drag it to any row or group header in a different group to reassign the note to that group
+- **Frontmatter write-back** — the group property is updated directly in the note's frontmatter on drop; no manual editing needed
+- **Undo support** — group reassignments are fully undoable via Ctrl+Z or the Undo toolbar button
+
 **Editing**
 - **Inline label editing** — pencil icon appears on row hover; click to rename the task in place
-- **Add task** — creates a new note in the same folder as existing tasks, pre-filled with today's date
-- **Undo / redo** — Ctrl+Z / Ctrl+Y (also toolbar buttons); 50-step history
+- **Undo / redo** — Ctrl+Z / Ctrl+Y (also toolbar buttons); 50-step history covers all edits including group changes
 
 **Display**
 - **Color by property** — map any frontmatter value to a color from a theme-adaptive palette
@@ -55,7 +59,7 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 - **Resizable label column** — drag to adjust width; persisted per view
 - **Theme-adaptive colors** — all palette colors are Obsidian CSS variables; they shift with your theme automatically
 - **Point tasks** — notes with only a start date render as a single-day marker
-- **Grouping and sorting** — handled by Bases natively; the timeline respects whatever grouping you configure
+- **Sorting** — handled by Bases natively; the timeline respects whatever sort order you configure
 
 **Other**
 - **Export PNG** — captures the current timeline view and saves it to the vault root
