@@ -2,6 +2,13 @@
 
 ## 0.1.4 (unreleased)
 
+### New Features
+- **Draw to create dates** — on rows with no dates, the track area shows a crosshair cursor; click and drag to draw a bar and set the start/end dates directly in the note's frontmatter; respects the date properties configured in the view
+- **Clear dates** — right-click any bar → "Clear dates" removes the start and end date from the note's frontmatter; the row returns to dateless state; undoable
+- **Drag between groups** — when the view is grouped, a grip handle appears on each row; drag it to any row or group header in another group to reassign the note; frontmatter is updated on drop; undoable
+- **Read-only bars for formula dates** — when a date property is a formula or file field, the bar is non-interactive: no drag, resize, or draw; the Edit dates popover disables the relevant input and shows a tooltip explaining why
+- **Mobile support** — plugin now works on Obsidian mobile (`isDesktopOnly` removed)
+
 ### Bug Fixes
 - **Drag to Ungrouped removes property** — dragging a note into the Ungrouped section now deletes the group property from frontmatter instead of setting it to the literal string "Ungrouped"
 - **Group drag writes correct frontmatter key** — the `note.` namespace prefix used internally by Bases is now stripped before writing, preventing stale `note.property` keys from being created in the file
