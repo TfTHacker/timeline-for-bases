@@ -1292,7 +1292,7 @@ export class TimelineView extends BasesView {
 	}
 
 	private renderGroup(containerEl: HTMLElement, group: BasesEntryGroup, config: TimelineConfig, min: Date, max: Date, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>): void {
-		const isGrouped = config.groupByProp !== null && (this.data.groupedData.length > 1 || group.hasKey());
+		const isGrouped = this.data.groupedData.length > 1 || group.hasKey();
 		const groupLabel = (group.key && !Value.equals(group.key, NullValue.value))
 			? group.key.toString()
 			: 'Ungrouped';
