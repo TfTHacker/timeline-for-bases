@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 
 
 ### Performance
 Significant rendering improvements were made to reduce DOM overhead, minimize redundant work, and keep the UI responsive with large datasets.
