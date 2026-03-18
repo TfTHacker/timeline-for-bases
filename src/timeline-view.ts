@@ -1582,10 +1582,14 @@ export class TimelineView extends BasesView {
 		//    to identify which field holds the group key value.
 		let groupByProp = hintProp;
 
+		// Helper: normalise inferred key by stripping Bases' `note.` namespace prefix.
+		// Bases uses `note.property` as a property ID, but the actual YAML key is just `property`.
+		const normaliseKey = (k: string) => k.startsWith('note.') ? k.slice(5) : k;
+
 		if (!groupByProp && fromGroupValue !== 'Ungrouped') {
 			for (const [k, v] of Object.entries(fm)) {
 				if (k === 'position') continue;
-				if (String(v ?? '') === fromGroupValue) { groupByProp = k; break; }
+				if (String(v ?? '') === fromGroupValue) { groupByProp = normaliseKey(k); break; }
 			}
 		}
 
@@ -1599,7 +1603,7 @@ export class TimelineView extends BasesView {
 					const cfm = this.app.metadataCache.getFileCache(candidate.file)?.frontmatter ?? {};
 					for (const [k, v] of Object.entries(cfm)) {
 						if (k === 'position') continue;
-						if (String(v ?? '') === grpLabel) { groupByProp = k; break outer; }
+						if (String(v ?? '') === grpLabel) { groupByProp = normaliseKey(k); break outer; }
 					}
 				}
 			}
