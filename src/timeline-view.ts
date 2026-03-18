@@ -1581,7 +1581,7 @@ export class TimelineView extends BasesView {
 			// Right-click context menu
 			barEl.addEventListener('contextmenu', (e: MouseEvent) => {
 				e.preventDefault();
-				this._showContextMenu(e, entry, startPropKey, endPropKey, dates!.start, dates!.end, canEdit);
+				this._showContextMenu(e, entry, startPropKey, endPropKey, dates!.start, dates!.end, canEdit, config.startWritable, config.endWritable);
 			});
 		}
 	}
@@ -1751,7 +1751,9 @@ export class TimelineView extends BasesView {
 		endKey: string,
 		currentStart: Date,
 		currentEnd: Date,
-		canEdit = true
+		canEdit = true,
+		startWritable = true,
+		endWritable = true
 	): void {
 		const menu = new Menu();
 
@@ -1766,7 +1768,7 @@ export class TimelineView extends BasesView {
 			menu.addItem(item => item
 				.setTitle('Edit dates…')
 				.setIcon('calendar')
-				.onClick(() => this._showEditDatesPopover(e, entry, startKey, endKey, currentStart, currentEnd)));
+				.onClick(() => this._showEditDatesPopover(e, entry, startKey, endKey, currentStart, currentEnd, startWritable, endWritable)));
 		}
 
 		menu.addItem(item => item
@@ -1818,7 +1820,9 @@ export class TimelineView extends BasesView {
 		startKey: string,
 		endKey: string,
 		currentStart: Date,
-		currentEnd: Date
+		currentEnd: Date,
+		startWritable = true,
+		endWritable = true
 	): void {
 		const existing = document.getElementById('tl-edit-dates-popover');
 		if (existing) existing.remove();
@@ -1830,10 +1834,12 @@ export class TimelineView extends BasesView {
 		pop.createEl('label', { text: 'Start', cls: 'tl-pop-label' });
 		const startInput = pop.createEl('input', { type: 'date' });
 		startInput.value = this._fmtDate(currentStart);
+		if (!startWritable) { startInput.disabled = true; startInput.title = 'Set by a formula — cannot be edited here'; }
 
 		pop.createEl('label', { text: 'End', cls: 'tl-pop-label' });
 		const endInput = pop.createEl('input', { type: 'date' });
 		endInput.value = this._fmtDate(currentEnd);
+		if (!endWritable) { endInput.disabled = true; endInput.title = 'Set by a formula — cannot be edited here'; }
 
 		const save = pop.createEl('button', { cls: 'mod-cta', text: 'Save' });
 		save.addEventListener('click', async () => {
