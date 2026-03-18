@@ -1541,51 +1541,51 @@ export class TimelineView extends BasesView {
 		const labelKey = config.labelProp     ? String(config.labelProp).replace(/^note\./, '')      : null;
 		const taskName = 'New task';
 
-		// ── TaskNotes integration ─────────────────────────────────────────────
-		const tnPlugin  = (this.app as any).plugins?.plugins?.['tasknotes'];
-		const tnService = tnPlugin?.taskService;
-
-		if (tnService) {
-			const TN_DATE_FIELDS = ['due', 'scheduled'];
-			const taskData: Record<string, any> = { title: taskName, creationContext: 'api' };
-
-			if (TN_DATE_FIELDS.includes(startKey)) taskData[startKey] = startStr;
-			else taskData.customFrontmatter = { ...taskData.customFrontmatter, [startKey]: startStr };
-
-			if (TN_DATE_FIELDS.includes(endKey) && endKey !== startKey)
-				taskData[endKey] = startStr;
-			else if (!TN_DATE_FIELDS.includes(endKey))
-				taskData.customFrontmatter = { ...taskData.customFrontmatter, [endKey]: startStr };
-
-			if (!taskData.due && !taskData.scheduled) taskData.due = startStr;
-
-			const result = await tnService.createTask(taskData);
-			this._pendingEditPath = result.file.path;
-			return;
-		}
-
-		// ── Generic path ──────────────────────────────────────────────────────
+		// Target folder: use the folder of the first visible entry so the new
+		// note always lands in the same folder the current view is showing,
+		// regardless of any plugin's own folder setting.
 		const entries = (this.data.groupedData || []).flatMap((g: BasesEntryGroup) => g.entries);
 		const folder  = entries.length > 0 ? (entries[0].file.parent?.path ?? '') : '';
 
-		// Clone frontmatter structure from first visible entry
-		const fm: Record<string, string> = {};
-		if (entries.length > 0) {
+		// Build frontmatter ────────────────────────────────────────────────────
+		// If TaskNotes is installed, seed defaults from its settings so the new
+		// note gets the right status, priority, and identification tag.
+		// Otherwise clone the structure from the first visible entry.
+		const fm: Record<string, unknown> = {};
+
+		const tnSettings = (this.app as any).plugins?.plugins?.['tasknotes']?.settings;
+		if (tnSettings) {
+			if (tnSettings.defaultTaskStatus)   fm['status']   = tnSettings.defaultTaskStatus;
+			if (tnSettings.defaultTaskPriority) fm['priority'] = tnSettings.defaultTaskPriority;
+			if (tnSettings.taskIdentificationMethod === 'tag' && tnSettings.taskTag) {
+				fm['tags'] = [tnSettings.taskTag];
+			}
+		} else if (entries.length > 0) {
 			const cached = this.app.metadataCache.getFileCache(entries[0].file)?.frontmatter ?? {};
 			for (const key of Object.keys(cached)) {
 				if (key === startKey || key === endKey || key === 'position') continue;
 				const val = cached[key];
-				if (typeof val === 'boolean') fm[key] = 'false';
-				else if (typeof val === 'number') fm[key] = '0';
-				else if (Array.isArray(val))      fm[key] = '[]';
+				if (typeof val === 'boolean') fm[key] = false;
+				else if (typeof val === 'number') fm[key] = 0;
+				else if (Array.isArray(val))      fm[key] = [];
 				else                              fm[key] = '';
 			}
 		}
 
+		// Date fields and label
 		fm[startKey] = startStr;
 		fm[endKey]   = startStr;
 		if (labelKey && labelKey !== 'title') fm[labelKey] = taskName;
 
+		// Build YAML string
+		const toYaml = (v: unknown): string => {
+			if (Array.isArray(v)) return `[${(v as string[]).map(s => `"${s}"`).join(', ')}]`;
+			if (typeof v === 'boolean' || typeof v === 'number') return String(v);
+			return String(v ?? '');
+		};
+		const yamlLines = Object.entries(fm).map(([k, v]) => `${k}: ${toYaml(v)}`).join('\n');
+
+		// Unique filename in target folder
 		let fileName = `${taskName} ${startStr}`;
 		let filePath  = folder ? `${folder}/${fileName}.md` : `${fileName}.md`;
 		let n = 1;
@@ -1594,9 +1594,8 @@ export class TimelineView extends BasesView {
 			filePath  = folder ? `${folder}/${fileName}.md` : `${fileName}.md`;
 		}
 
-		const yamlLines = Object.entries(fm).map(([k, v]) => `${k}: ${v}`).join('\n');
-		const content   = `---\n${yamlLines}\n---\n\n`;
-		const file      = await this.app.vault.create(filePath, content);
+		const content = `---\n${yamlLines}\n---\n\n`;
+		const file    = await this.app.vault.create(filePath, content);
 		this._pendingEditPath = file.path;
 	}
 
