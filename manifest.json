@@ -5,7 +5,7 @@
 	"minAppVersion": "1.10.0",
 	"description": "A Gantt-style timeline view for Bases. Visualize, drag, resize, and edit task dates directly on the grid.",
 	"author": "TfTHacker",
-	"isDesktopOnly": true,
+	"isDesktopOnly": false,
 	"fundingUrl": {
 		"Visit my site": "https://x.com/tfthacker"
 	}
