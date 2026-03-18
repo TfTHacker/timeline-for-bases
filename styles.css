@@ -792,6 +792,18 @@
 .bases-timeline-row.is-dragging { opacity: 0.45; }
 .bases-timeline-row.is-drop-target { outline: 1px dashed var(--color-accent); background: var(--background-modifier-hover); }
 
+/* Draw-to-create dates */
+.bases-timeline-track.is-draw-zone { cursor: crosshair; }
+.bases-timeline-draw-ghost {
+	position: absolute;
+	top: 20%;
+	height: 60%;
+	background: var(--color-accent);
+	opacity: 0.35;
+	border-radius: 3px;
+	pointer-events: none;
+}
+
 
 
 .bases-timeline-row {

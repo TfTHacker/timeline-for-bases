@@ -54,6 +54,17 @@ const PALETTE: string[] = [
 
 const DEFAULT_COLORS = PALETTE;
 
+interface DrawState {
+	entryPath: string;
+	startKey: string;
+	endKey: string;
+	anchorDate: Date;       // date at mousedown
+	rangeMin: Date;
+	totalMs: number;
+	trackEl: HTMLElement;   // the track div for this row
+	ghostEl: HTMLElement;   // preview bar element
+}
+
 interface UndoRecord {
 	entries: Array<{
 		path: string;
@@ -106,6 +117,7 @@ export class TimelineView extends BasesView {
 	private _redoStack: UndoRecord[] = [];
 	private _undoBtn: HTMLButtonElement | null = null;
 	private _redoBtn: HTMLButtonElement | null = null;
+	private _draw: DrawState | null = null;
 
 	private _dragState: DragState | null = null;
 	private _dragTooltipEl: HTMLElement | null = null;
@@ -1428,6 +1440,26 @@ export class TimelineView extends BasesView {
 		if (!dates) {
 			rowEl.addClass('is-missing');
 			labelEl.addClass('is-missing');
+			// Allow click-drag on the track to draw a new bar and set dates
+			if (config.startDateProp && config.endDateProp) {
+				const startKey = String(config.startDateProp).replace(/^note\./, '');
+				const endKey   = String(config.endDateProp).replace(/^note\./, '');
+				trackEl.addClass('is-draw-zone');
+				trackEl.setAttribute('title', 'Click and drag to set dates');
+				trackEl.addEventListener('mousedown', (e: MouseEvent) => {
+					if (e.button !== 0 || !this._rangeMin || !this._rangeMax) return;
+					e.preventDefault();
+					e.stopPropagation();
+					const rect     = trackEl.getBoundingClientRect();
+					const totalMs  = this._rangeMax.getTime() - this._rangeMin.getTime();
+					const pct      = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+					const anchorDate = this._localMidnight(new Date(this._rangeMin.getTime() + pct * totalMs));
+					const ghostEl  = trackEl.createDiv({ cls: 'bases-timeline-draw-ghost' });
+					ghostEl.style.left  = `${pct * 100}%`;
+					ghostEl.style.width = '0%';
+					this._draw = { entryPath: entry.file.path, startKey, endKey, anchorDate, rangeMin: this._rangeMin!, totalMs, trackEl, ghostEl };
+				});
+			}
 			return;
 		}
 
@@ -1893,6 +1925,20 @@ export class TimelineView extends BasesView {
 	}
 
 	private _onDragMove(e: MouseEvent): void {
+		// ── Draw mode (click-drag to set dates on a dateless row) ───────────
+		if (this._draw) {
+			const d     = this._draw;
+			const rect  = d.trackEl.getBoundingClientRect();
+			const pct   = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+			const curDate = this._localMidnight(new Date(d.rangeMin.getTime() + pct * d.totalMs));
+			const start = curDate < d.anchorDate ? curDate : d.anchorDate;
+			const end   = curDate < d.anchorDate ? d.anchorDate : curDate;
+			const startPct = ((start.getTime() - d.rangeMin.getTime()) / d.totalMs) * 100;
+			const endPct   = ((end.getTime() + 86400000 - d.rangeMin.getTime()) / d.totalMs) * 100;
+			d.ghostEl.style.left  = `${startPct}%`;
+			d.ghostEl.style.width = `${Math.max(endPct - startPct, 0.5)}%`;
+			return;
+		}
 		if (!this._dragState) return;
 		const s = this._dragState;
 
@@ -1946,7 +1992,35 @@ export class TimelineView extends BasesView {
 		}
 	}
 
-	private async _onDragEnd(_e: MouseEvent): Promise<void> {
+	private async _onDragEnd(e: MouseEvent): Promise<void> {
+		// ── Draw mode finish ─────────────────────────────────────────────────
+		if (this._draw) {
+			const d    = this._draw;
+			this._draw = null;
+			const rect = d.trackEl.getBoundingClientRect();
+			const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+			const curDate = this._localMidnight(new Date(d.rangeMin.getTime() + pct * d.totalMs));
+			const start = curDate < d.anchorDate ? curDate : d.anchorDate;
+			const end   = curDate < d.anchorDate ? d.anchorDate : curDate;
+			d.ghostEl.remove();
+
+			const startStr = this._fmtDate(start);
+			const endStr   = this._fmtDate(end);
+
+			const file = this.app.vault.getFileByPath(d.entryPath);
+			if (file) {
+				this._pushUndo([{
+					path: d.entryPath, startKey: d.startKey, endKey: d.endKey,
+					before: { start: '', end: '' },
+					after:  { start: startStr, end: endStr },
+				}]);
+				await this.app.fileManager.processFrontMatter(file, (fm) => {
+					fm[d.startKey] = startStr;
+					fm[d.endKey]   = endStr;
+				});
+			}
+			return;
+		}
 		if (!this._dragState) return;
 		const s = this._dragState;
 		this._dragState = null;
