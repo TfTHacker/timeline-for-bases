@@ -308,7 +308,12 @@ export class TimelineView extends BasesView {
 		const addBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn', attr: { 'aria-label': 'Add a new task note' } });
 		setIcon(addBtn.createSpan({ cls: 'nav-icon' }), 'plus');
 		addBtn.createSpan({ text: 'Add' });
-		addBtn.addEventListener('click', () => this._addTask(config));
+		addBtn.addEventListener('click', () => {
+			this._addTask(config).catch(err => {
+				console.error('[Timeline] _addTask failed:', err);
+				new Notice(`Timeline: failed to add task — ${err?.message ?? err}`);
+			});
+		});
 
 		// Export PNG button
 		const exportBtn = rightEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Export timeline as PNG' } });
@@ -1537,22 +1542,13 @@ export class TimelineView extends BasesView {
 		const taskName = 'New task';
 
 		// ── TaskNotes integration ─────────────────────────────────────────────
-		// If the TaskNotes plugin is installed, delegate creation to its service
-		// so that all defaults (status, priority, folder, tags, template, etc.)
-		// are applied exactly as the user has configured TaskNotes.
-		const tnPlugin = (this.app as any).plugins?.plugins?.['tasknotes'];
+		const tnPlugin  = (this.app as any).plugins?.plugins?.['tasknotes'];
 		const tnService = tnPlugin?.taskService;
 
 		if (tnService) {
-			// Build the minimal task data. Map our date props to TaskNotes fields
-			// where they match; anything else goes into customFrontmatter.
-			const taskData: Record<string, any> = {
-				title: taskName,
-				creationContext: 'api',
-			};
-
-			// Standard TaskNotes date fields
 			const TN_DATE_FIELDS = ['due', 'scheduled'];
+			const taskData: Record<string, any> = { title: taskName, creationContext: 'api' };
+
 			if (TN_DATE_FIELDS.includes(startKey)) taskData[startKey] = startStr;
 			else taskData.customFrontmatter = { ...taskData.customFrontmatter, [startKey]: startStr };
 
@@ -1561,17 +1557,11 @@ export class TimelineView extends BasesView {
 			else if (!TN_DATE_FIELDS.includes(endKey))
 				taskData.customFrontmatter = { ...taskData.customFrontmatter, [endKey]: startStr };
 
-			// Fallback: ensure at least one date field is set
 			if (!taskData.due && !taskData.scheduled) taskData.due = startStr;
 
-			try {
-				const result = await tnService.createTask(taskData);
-				this._pendingEditPath = result.file.path;
-				return;
-			} catch (err) {
-				console.warn('[Timeline] TaskNotes createTask failed, falling back to generic create:', err);
-				// fall through to generic path
-			}
+			const result = await tnService.createTask(taskData);
+			this._pendingEditPath = result.file.path;
+			return;
 		}
 
 		// ── Generic path ──────────────────────────────────────────────────────
