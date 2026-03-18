@@ -30,6 +30,9 @@ interface TimelineConfig {
 	labelColWidth: number;
 	/** Raw frontmatter key used for groupBy, if any. Null when not grouped. */
 	groupByProp: string | null;
+	/** Whether the start/end date properties are writable frontmatter fields (not formulas or file metadata). */
+	startWritable: boolean;
+	endWritable: boolean;
 }
 
 const LABEL_COLUMN_WIDTH_PX = 175;
@@ -229,6 +232,13 @@ export class TimelineView extends BasesView {
 		const rawConfig = this.config as any;
 		const groupByProp: string | null = rawConfig?.groupBy?.property ?? null;
 
+		// A property is writable only if it references a frontmatter field (note.*)
+		// Formula and file properties are computed/read-only.
+		const isWritable = (prop: BasesPropertyId | null): boolean =>
+			prop !== null && String(prop).startsWith('note.');
+		const startWritable = isWritable(startDateProp);
+		const endWritable   = isWritable(endDateProp);
+
 		return {
 			startDateProp,
 			endDateProp,
@@ -240,6 +250,8 @@ export class TimelineView extends BasesView {
 			weekStart,
 			labelColWidth,
 			groupByProp,
+			startWritable,
+			endWritable,
 		};
 	}
 
@@ -1440,8 +1452,8 @@ export class TimelineView extends BasesView {
 		if (!dates) {
 			rowEl.addClass('is-missing');
 			labelEl.addClass('is-missing');
-			// Allow click-drag on the track to draw a new bar and set dates
-			if (config.startDateProp && config.endDateProp) {
+			// Allow click-drag on the track to draw a new bar and set dates (only for writable props)
+			if (config.startDateProp && config.endDateProp && config.startWritable && config.endWritable) {
 				const startKey = String(config.startDateProp).replace(/^note\./, '');
 				const endKey   = String(config.endDateProp).replace(/^note\./, '');
 				trackEl.addClass('is-draw-zone');
@@ -1517,17 +1529,23 @@ export class TimelineView extends BasesView {
 		// Mark bar as selected if in selection set
 		if (this._selectedPaths.has(entry.file.path)) barEl.addClass('is-selected');
 
+		const canMove   = config.startWritable && config.endWritable;
+		const canResizeStart = config.startWritable;
+		const canResizeEnd   = config.endWritable;
+		const canEdit   = canMove || canResizeStart || canResizeEnd;
+
 		if (startPropKey && endPropKey && !dates.isPoint) {
-			// Visual-only resize handles (no event listeners — cursor comes from CSS)
-			barEl.createDiv({ cls: 'bases-timeline-bar-handle is-start' });
-			barEl.createDiv({ cls: 'bases-timeline-bar-handle is-end' });
+			// Resize handles — only shown for writable edges
+			if (canResizeStart) barEl.createDiv({ cls: 'bases-timeline-bar-handle is-start' });
+			if (canResizeEnd)   barEl.createDiv({ cls: 'bases-timeline-bar-handle is-end' });
+			if (!canEdit) barEl.addClass('is-readonly');
 
 			// Single mousedown on the bar — detect drag type from click position relative to bar
 			barEl.addEventListener('mousedown', e => {
 				e.preventDefault();
 				this.containerEl.focus();
 
-				// Shift+click: toggle selection, no drag
+				// Shift+click: toggle selection (always allowed)
 				if (e.shiftKey) {
 					if (this._selectedPaths.has(entry.file.path)) {
 						this._selectedPaths.delete(entry.file.path);
@@ -1539,22 +1557,22 @@ export class TimelineView extends BasesView {
 					return;
 				}
 
-				// Click without shift on unselected bar: clear other selections
-				if (!this._selectedPaths.has(entry.file.path)) {
-					this._clearSelection();
-				}
+				if (!this._selectedPaths.has(entry.file.path)) this._clearSelection();
+				if (!canEdit) return; // read-only bar — no drag
 
 				const barRect = barEl.getBoundingClientRect();
 				const barWidth = barRect.width || 1;
 				const clickX = e.clientX - barRect.left;
 				const EDGE = Math.min(10, barWidth * 0.3);
 				let type: DragState['type'];
-				if (clickX <= EDGE) {
+				if (clickX <= EDGE && canResizeStart) {
 					type = 'resize-start';
-				} else if (clickX >= barWidth - EDGE) {
+				} else if (clickX >= barWidth - EDGE && canResizeEnd) {
 					type = 'resize-end';
-				} else {
+				} else if (canMove) {
 					type = 'move';
+				} else {
+					return; // no valid drag type
 				}
 				this._startDrag(type, barEl, entry.file.path, startPropKey, endPropKey,
 					dates!.start, dates!.end, e.clientX, min, total);
@@ -1563,7 +1581,7 @@ export class TimelineView extends BasesView {
 			// Right-click context menu
 			barEl.addEventListener('contextmenu', (e: MouseEvent) => {
 				e.preventDefault();
-				this._showContextMenu(e, entry, startPropKey, endPropKey, dates!.start, dates!.end);
+				this._showContextMenu(e, entry, startPropKey, endPropKey, dates!.start, dates!.end, canEdit);
 			});
 		}
 	}
@@ -1732,7 +1750,8 @@ export class TimelineView extends BasesView {
 		startKey: string,
 		endKey: string,
 		currentStart: Date,
-		currentEnd: Date
+		currentEnd: Date,
+		canEdit = true
 	): void {
 		const menu = new Menu();
 
@@ -1743,10 +1762,12 @@ export class TimelineView extends BasesView {
 
 		menu.addSeparator();
 
-		menu.addItem(item => item
-			.setTitle('Edit dates…')
-			.setIcon('calendar')
-			.onClick(() => this._showEditDatesPopover(e, entry, startKey, endKey, currentStart, currentEnd)));
+		if (canEdit) {
+			menu.addItem(item => item
+				.setTitle('Edit dates…')
+				.setIcon('calendar')
+				.onClick(() => this._showEditDatesPopover(e, entry, startKey, endKey, currentStart, currentEnd)));
+		}
 
 		menu.addItem(item => item
 			.setTitle('Duplicate')
@@ -1764,7 +1785,7 @@ export class TimelineView extends BasesView {
 
 		menu.addSeparator();
 
-		menu.addItem(item => item
+		if (canEdit) menu.addItem(item => item
 			.setTitle('Clear dates')
 			.setIcon('calendar-x')
 			.onClick(async () => {
