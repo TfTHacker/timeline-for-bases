@@ -1483,7 +1483,6 @@ export class TimelineView extends BasesView {
 	}
 
 	private _showJumpToDate(anchor: HTMLElement, evt: MouseEvent): void {
-		// Create a small popover with a date input
 		const existing = document.getElementById('tl-jump-popover');
 		if (existing) { existing.remove(); return; }
 
@@ -1493,21 +1492,20 @@ export class TimelineView extends BasesView {
 		popover.style.left = `${rect.left}px`;
 
 		const input = popover.createEl('input', { type: 'date' });
-		const today = new Date();
-		input.value = this._fmtDate(today);
+		input.value = this._fmtDate(new Date());
 
-		const go = popover.createEl('button', { cls: 'mod-cta', text: 'Go' });
-		go.addEventListener('click', () => {
+		const jump = () => {
 			const d = new Date(input.value + 'T00:00:00');
-			if (!isNaN(d.getTime())) this._scrollToDate(d);
-			popover.remove();
-		});
+			if (!isNaN(d.getTime())) { this._scrollToDate(d); popover.remove(); }
+		};
+
+		// Jump immediately on date selection (covers native calendar picker click)
+		input.addEventListener('change', jump);
 		input.addEventListener('keydown', (e: KeyboardEvent) => {
-			if (e.key === 'Enter') go.click();
+			if (e.key === 'Enter') jump();
 			if (e.key === 'Escape') popover.remove();
 		});
 
-		// Close on outside click
 		const dismiss = (e: MouseEvent) => {
 			if (!popover.contains(e.target as Node)) { popover.remove(); document.removeEventListener('mousedown', dismiss); }
 		};
