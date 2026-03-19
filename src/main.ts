@@ -37,22 +37,40 @@ export default class TimelinePlugin extends Plugin {
 			await this.app.vault.createFolder(notesFolder);
 		}
 
-		// Generate 10 vacation planning tasks relative to today
+		// Generate 20 vacation planning tasks relative to today
+		// Parallel groups are intentional: days 0-1 (budget+passports), 6-9 (flights+accommodation research),
+		// 12-13 (book flights+accommodation), 22-24 (pet care+house sitter), 29-30 (pack+confirm)
 		const today = new Date();
 		const fmt = (d: Date) => d.toISOString().slice(0, 10);
 		const addDays = (d: Date, n: number) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
 
 		const tasks: { name: string; start: number; duration: number; priority: 'High' | 'Medium' | 'Low' }[] = [
-			{ name: 'Set vacation budget',            start: 0,  duration: 3,  priority: 'High'   },
-			{ name: 'Choose destination',             start: 2,  duration: 4,  priority: 'High'   },
-			{ name: 'Research accommodation options', start: 5,  duration: 5,  priority: 'Medium' },
-			{ name: 'Book flights',                   start: 8,  duration: 2,  priority: 'High'   },
-			{ name: 'Book accommodation',             start: 10, duration: 2,  priority: 'High'   },
-			{ name: 'Plan daily itinerary',           start: 12, duration: 7,  priority: 'Medium' },
-			{ name: 'Arrange pet care',               start: 14, duration: 3,  priority: 'Medium' },
-			{ name: 'Pack luggage',                   start: 25, duration: 2,  priority: 'Low'    },
-			{ name: 'Confirm all bookings',           start: 20, duration: 1,  priority: 'High'   },
-			{ name: 'Purchase travel insurance',      start: 6,  duration: 1,  priority: 'Low'    },
+			// Week 1 — foundations (budget + passports run in parallel)
+			{ name: 'Set vacation budget',             start: 0,  duration: 4,  priority: 'High'   },
+			{ name: 'Check passport validity',         start: 0,  duration: 2,  priority: 'High'   },
+			{ name: 'Choose destination',              start: 3,  duration: 4,  priority: 'High'   },
+			{ name: 'Agree on travel dates',           start: 3,  duration: 2,  priority: 'Medium' },
+			// Week 2 — research phase (flights + accommodation researched in parallel)
+			{ name: 'Research flights',                start: 6,  duration: 4,  priority: 'Medium' },
+			{ name: 'Research accommodation options',  start: 6,  duration: 5,  priority: 'Medium' },
+			{ name: 'Apply for visas if required',     start: 7,  duration: 10, priority: 'High'   },
+			{ name: 'Get travel vaccinations',         start: 8,  duration: 3,  priority: 'Medium' },
+			// Week 2–3 — bookings (flights + accommodation booked in parallel)
+			{ name: 'Book flights',                    start: 12, duration: 2,  priority: 'High'   },
+			{ name: 'Book accommodation',              start: 12, duration: 2,  priority: 'High'   },
+			{ name: 'Purchase travel insurance',       start: 14, duration: 2,  priority: 'High'   },
+			// Week 3 — planning
+			{ name: 'Plan daily itinerary',            start: 17, duration: 7,  priority: 'Medium' },
+			{ name: 'Research local transport',        start: 17, duration: 4,  priority: 'Low'    },
+			{ name: 'Book tours and activities',       start: 21, duration: 4,  priority: 'Medium' },
+			// Week 4 — logistics (pet care + house sitter arranged in parallel)
+			{ name: 'Arrange pet care',                start: 22, duration: 3,  priority: 'Medium' },
+			{ name: 'Arrange house sitter',            start: 22, duration: 3,  priority: 'Low'    },
+			{ name: 'Notify bank of travel dates',     start: 25, duration: 1,  priority: 'Low'    },
+			{ name: 'Buy travel accessories',          start: 25, duration: 3,  priority: 'Low'    },
+			// Final days (packing + confirm bookings run in parallel)
+			{ name: 'Pack luggage',                    start: 29, duration: 2,  priority: 'Low'    },
+			{ name: 'Confirm all bookings',            start: 29, duration: 1,  priority: 'High'   },
 		];
 
 		for (const task of tasks) {
