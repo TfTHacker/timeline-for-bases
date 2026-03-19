@@ -49,12 +49,12 @@ export default class TimelinePlugin extends Plugin {
 			{ name: 'Set vacation budget',             start: 0,  duration: 4,  priority: 'High'   },
 			{ name: 'Check passport validity',         start: 0,  duration: 2,  priority: 'High'   },
 			{ name: 'Choose destination',              start: 3,  duration: 4,  priority: 'High'   },
-			{ name: 'Agree on travel dates',           start: 3,  duration: 2,  priority: 'Medium' },
+			{ name: 'Agree on travel dates',           start: 3,  duration: 2,  priority: 'Low'    },
 			// Week 2 — research phase (flights + accommodation researched in parallel)
 			{ name: 'Research flights',                start: 6,  duration: 4,  priority: 'Medium' },
 			{ name: 'Research accommodation options',  start: 6,  duration: 5,  priority: 'Medium' },
 			{ name: 'Apply for visas if required',     start: 7,  duration: 10, priority: 'High'   },
-			{ name: 'Get travel vaccinations',         start: 8,  duration: 3,  priority: 'Medium' },
+			{ name: 'Get travel vaccinations',         start: 8,  duration: 3,  priority: 'Low'    },
 			// Week 2–3 — bookings (flights + accommodation booked in parallel)
 			{ name: 'Book flights',                    start: 12, duration: 2,  priority: 'High'   },
 			{ name: 'Book accommodation',              start: 12, duration: 2,  priority: 'High'   },
