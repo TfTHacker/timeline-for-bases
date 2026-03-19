@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5
+
+### Improvements
+- **Improved sample base** — the "Create sample base" button now generates 20 vacation planning tasks with realistic priorities, parallel task groups, and a clear progression from planning through departure
+
 ## 0.1.4
 
 ### New Features
