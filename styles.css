@@ -1196,3 +1196,29 @@ body.bases-timeline-resizing * {
 	gap: 8px;
 	margin-top: 1.5em;
 }
+
+/* Text prop suggestion dropdown */
+.bases-timeline-prop-suggestions {
+	position: fixed;
+	z-index: 300;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+	overflow-y: auto;
+	max-height: 200px;
+}
+
+.bases-timeline-prop-suggestion-item {
+	padding: 5px 10px;
+	font-size: 0.82rem;
+	color: var(--text-normal);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.bases-timeline-prop-suggestion-item:hover,
+.bases-timeline-prop-suggestion-item:focus {
+	background: var(--background-modifier-hover);
+	outline: none;
+}

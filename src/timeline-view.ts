@@ -1582,7 +1582,43 @@ export class TimelineView extends BasesView {
 						input.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
 						input.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
 
+						// Suggestions dropdown for text fields
+						let dropdown: HTMLElement | null = null;
+						const removeDropdown = () => { dropdown?.remove(); dropdown = null; };
+
+						if (propType !== 'number') {
+							const allValues = this.getVaultValuesForProp(propKey);
+
+							const showDropdown = (filter: string) => {
+								removeDropdown();
+								const matches = allValues.filter(v =>
+									v.toLowerCase().includes(filter.toLowerCase()) && v !== filter
+								);
+								if (matches.length === 0) return;
+
+								dropdown = document.body.createDiv({ cls: 'bases-timeline-prop-suggestions' });
+								const rect = input.getBoundingClientRect();
+								dropdown.style.top = `${rect.bottom + 2}px`;
+								dropdown.style.left = `${rect.left}px`;
+								dropdown.style.minWidth = `${rect.width}px`;
+
+								matches.slice(0, 10).forEach(v => {
+									const item = dropdown!.createDiv({ cls: 'bases-timeline-prop-suggestion-item', text: v });
+									item.addEventListener('mousedown', (me: MouseEvent) => {
+										me.preventDefault();
+										input.value = v;
+										removeDropdown();
+										input.blur();
+									});
+								});
+							};
+
+							input.addEventListener('input', () => showDropdown(input.value));
+							input.addEventListener('focus', () => showDropdown(input.value));
+						}
+
 						const save = async () => {
+							removeDropdown();
 							const newVal = input.value.trim();
 							input.replaceWith(valueSpan);
 							editBtn.show();
@@ -1605,7 +1641,11 @@ export class TimelineView extends BasesView {
 						input.addEventListener('blur', save);
 						input.addEventListener('keydown', (ke: KeyboardEvent) => {
 							if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
-							if (ke.key === 'Escape') { input.value = text; input.blur(); }
+							if (ke.key === 'Escape') { removeDropdown(); input.value = text; input.blur(); }
+							if (ke.key === 'ArrowDown' && dropdown) {
+								ke.preventDefault();
+								(dropdown.firstElementChild as HTMLElement)?.focus();
+							}
 						});
 					});
 				}
@@ -2635,6 +2675,23 @@ export class TimelineView extends BasesView {
 			const value = entry.getValue(colorProp);
 			if (!value || !value.isTruthy()) continue;
 			values.add(value.toString());
+		}
+		return Array.from(values).sort((a, b) => a.localeCompare(b));
+	}
+
+	/** Collect all unique values used for a frontmatter key across the entire vault. */
+	private getVaultValuesForProp(propKey: string): string[] {
+		const values = new Set<string>();
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+			if (!fm) continue;
+			const v = fm[propKey];
+			if (v == null || v === '') continue;
+			if (Array.isArray(v)) {
+				v.forEach(item => item != null && values.add(String(item)));
+			} else {
+				values.add(String(v));
+			}
 		}
 		return Array.from(values).sort((a, b) => a.localeCompare(b));
 	}
