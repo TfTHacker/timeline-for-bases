@@ -559,7 +559,7 @@ export class TimelineView extends BasesView {
 			const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
 			const zoom = Math.max(config.zoom, 1);
 			if (config.timeScale === 'day') {
-				const dayPx = Math.min(120, 44 * zoom);
+				const dayPx = Math.min(60, 44 * zoom);
 				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * dayPx)}px`;
 			} else if (config.timeScale === 'week') {
 				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
@@ -657,7 +657,7 @@ export class TimelineView extends BasesView {
 			const zoom = Math.max(config.zoom, 1);
 			const scaleZoom = this.getScaleZoomFactor(config.timeScale);
 			if (config.timeScale === 'day') {
-				const dayPx = Math.min(120, 44 * zoom);
+				const dayPx = Math.min(60, 44 * zoom);
 				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * dayPx)}px`;
 			} else if (config.timeScale === 'week') {
 				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
