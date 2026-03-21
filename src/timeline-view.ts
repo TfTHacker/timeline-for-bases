@@ -1631,7 +1631,6 @@ export class TimelineView extends BasesView {
 				input.type = 'text';
 				input.value = labelSpan.textContent || '';
 				input.className = 'bases-timeline-label-input';
-				labelEl.replaceChild(labelSpan, labelSpan); // ensure span is there
 				labelSpan.replaceWith(input);
 				input.focus(); input.select();
 				input.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
