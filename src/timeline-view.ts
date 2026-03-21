@@ -1819,7 +1819,10 @@ export class TimelineView extends BasesView {
 	/** Returns the Obsidian metadata type for a frontmatter property name, e.g. 'date', 'number', 'checkbox'. */
 	private _getPropType(propKey: string): string {
 		try {
-			const info = (this.app as any).metadataTypeManager?.getPropertyInfo(propKey);
+			const mtm = (this.app as any).metadataTypeManager;
+			if (!mtm) return 'text';
+			// getTypeInfo(name) → { type: 'date' | 'datetime' | 'number' | ... }
+			const info = mtm.getTypeInfo?.(propKey) ?? mtm.properties?.[propKey];
 			return info?.type ?? 'text';
 		} catch {
 			return 'text';
