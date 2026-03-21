@@ -428,20 +428,47 @@
 	flex-shrink: 0;
 }
 
-/* Sticky Notes label cell in axis */
+/* Sticky frozen header zone: Notes col + prop cols */
 .bases-timeline-axis-spacer {
 	position: sticky;
 	left: 0;
 	z-index: 12;
+	width: var(--timeline-frozen-width, var(--timeline-label-col-width));
+	min-width: var(--timeline-frozen-width, var(--timeline-label-col-width));
+	flex-shrink: 0;
+	display: flex;
+	flex-direction: row;
+	align-items: stretch;
+	background: var(--background-primary);
+	border-right: 1px solid var(--background-modifier-border);
+}
+
+.bases-timeline-notes-header {
 	width: var(--timeline-label-col-width);
 	min-width: var(--timeline-label-col-width);
-	max-width: var(--timeline-label-col-width);
-	box-sizing: border-box;
 	flex-shrink: 0;
 	display: flex;
 	align-items: center;
 	padding: 0 10px;
-	background: var(--background-primary);
+	box-sizing: border-box;
+}
+
+/* Prop column headers in axis */
+.bases-timeline-prop-col-header {
+	width: var(--timeline-prop-col-width, 110px);
+	min-width: var(--timeline-prop-col-width, 110px);
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	padding: 0 8px;
+	box-sizing: border-box;
+	font-size: 0.75rem;
+	font-weight: 700;
+	color: var(--text-muted);
+	border-left: 1px solid var(--background-modifier-border);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 /* Inner timeline axis (context + labels) */
@@ -458,14 +485,6 @@
 .bases-timeline-axis[data-scale="quarter"],
 .bases-timeline-axis[data-scale="year"] {
 	height: 48px;
-}
-
-.bases-timeline-notes-header {
-	font-size: 0.82rem;
-	font-weight: 700;
-	color: var(--text-muted);
-	line-height: 1.2;
-	padding: 0;
 }
 
 .bases-timeline-axis-labels {
@@ -829,38 +848,29 @@
 	box-sizing: border-box;
 	flex-shrink: 0;
 	display: flex;
-	flex-direction: column;
-	justify-content: center;
+	align-items: center;
 	padding: 4px 10px;
 	font-size: 0.82rem;
 	font-weight: 400;
 	font-family: var(--font-interface);
 	letter-spacing: normal;
+	white-space: nowrap;
 	overflow: hidden;
 	background: var(--background-primary);
 	cursor: pointer;
 	color: var(--text-normal);
 }
 
-/* Top row: label text + pencil icon */
+/* Label inner wrapper (label text + pencil icon) */
 .bases-timeline-label-inner {
 	display: flex;
 	align-items: center;
 	width: 100%;
 	min-width: 0;
-	white-space: nowrap;
 	overflow: hidden;
 }
 
-.bases-timeline-label-inner span {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	min-width: 0;
-	flex: 1;
-}
-
-/* Fallback: plain spans still truncate (e.g. missing rows) */
+.bases-timeline-label-inner span,
 .bases-timeline-label > span {
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -869,38 +879,43 @@
 	flex: 1;
 }
 
-/* Property chips row */
-.bases-timeline-label-chips {
+/* Property columns in rows */
+.bases-timeline-prop-cell {
+	position: sticky;
+	z-index: 4;
+	width: var(--timeline-prop-col-width, 110px);
+	min-width: var(--timeline-prop-col-width, 110px);
+	flex-shrink: 0;
 	display: flex;
-	flex-wrap: nowrap;
-	gap: 6px;
-	margin-top: 2px;
-	overflow: hidden;
-	width: 100%;
-}
-
-.bases-timeline-label-chip {
-	display: inline-flex;
 	align-items: center;
-	font-size: 0.70rem;
+	padding: 4px 8px;
+	box-sizing: border-box;
+	font-size: 0.78rem;
 	color: var(--text-muted);
-	white-space: nowrap;
+	background: var(--background-primary);
+	border-left: 1px solid var(--background-modifier-border);
 	overflow: hidden;
-	text-overflow: ellipsis;
-	max-width: 100%;
-	flex-shrink: 1;
 }
 
-.bases-timeline-chip-name {
-	color: var(--text-faint);
-	margin-right: 2px;
+.bases-timeline-row.is-even .bases-timeline-prop-cell {
+	background: var(--background-secondary);
 }
 
-.bases-timeline-chip-value {
-	color: var(--text-muted);
+.bases-timeline-row:hover .bases-timeline-prop-cell,
+.bases-timeline-row.is-active-hover .bases-timeline-prop-cell {
+	background: var(--background-primary);
+}
+
+.bases-timeline-row.is-even:hover .bases-timeline-prop-cell,
+.bases-timeline-row.is-even.is-active-hover .bases-timeline-prop-cell {
+	background: var(--background-secondary);
+}
+
+.bases-timeline-prop-cell-value {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	width: 100%;
 }
 
 /* Resize handle on right edge of label column */

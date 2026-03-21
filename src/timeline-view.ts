@@ -34,11 +34,14 @@ interface TimelineConfig {
 	/** Whether the start/end date properties are writable frontmatter fields (not formulas or file metadata). */
 	startWritable: boolean;
 	endWritable: boolean;
-	/** Ordered list of extra properties to display as chips in the label column. */
+	/** Ordered list of extra properties to display as columns. */
 	extraProps: BasesPropertyId[];
+	/** Total width of the frozen left zone (label col + all prop cols). */
+	frozenWidth: number;
 }
 
 const LABEL_COLUMN_WIDTH_PX = 175;
+const PROP_COLUMN_WIDTH_PX = 110;
 const LABEL_COLUMN_MIN_PX = 80;
 const LABEL_COLUMN_MAX_PX = 500;
 
@@ -214,6 +217,8 @@ export class TimelineView extends BasesView {
 		const config = this.loadConfig();
 		this.containerEl.setAttribute('data-density', 'compact');
 		this.containerEl.style.setProperty('--timeline-label-col-width', `${config.labelColWidth}px`);
+		this.containerEl.style.setProperty('--timeline-frozen-width', `${config.frozenWidth}px`);
+		this.containerEl.style.setProperty('--timeline-prop-col-width', `${PROP_COLUMN_WIDTH_PX}px`);
 
 		this.renderHeader(config);
 		this.renderControls(config);
@@ -249,6 +254,7 @@ export class TimelineView extends BasesView {
 				.map(p => JSON.stringify(p))
 		);
 		const extraProps = this.config.getOrder().filter(p => !excludedProps.has(JSON.stringify(p)));
+		const frozenWidth = labelColWidth + extraProps.length * PROP_COLUMN_WIDTH_PX;
 
 		return {
 			startDateProp,
@@ -264,6 +270,7 @@ export class TimelineView extends BasesView {
 			startWritable,
 			endWritable,
 			extraProps,
+			frozenWidth,
 		};
 	}
 
@@ -538,18 +545,18 @@ export class TimelineView extends BasesView {
 			const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
 			const zoom = Math.max(config.zoom, 1);
 			if (config.timeScale === 'day') {
-				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 44 * zoom)}px`;
+				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 44 * zoom)}px`;
 			} else if (config.timeScale === 'week') {
-				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
+				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
 			} else if (config.timeScale === 'month') {
-				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 55 * zoom)}px`;
+				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 55 * zoom)}px`;
 			} else {
-				canvasEl.style.width = `calc(${config.labelColWidth}px + ${zoom * this.getScaleZoomFactor(config.timeScale) * 100}%)`;
+				canvasEl.style.width = `calc(${config.frozenWidth}px + ${zoom * this.getScaleZoomFactor(config.timeScale) * 100}%)`;
 			}
 			this.renderTimeAxis(canvasEl, min, max, config, ticks);
-			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.labelColWidth);
+			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.frozenWidth);
 			if (config.timeScale === 'day') {
-				this.renderTodayMarker(canvasEl, min, max, true, config.labelColWidth);
+				this.renderTodayMarker(canvasEl, min, max, true, config.frozenWidth);
 			}
 			this.attachRowClickHandler(canvasEl);
 
@@ -635,18 +642,18 @@ export class TimelineView extends BasesView {
 			const zoom = Math.max(config.zoom, 1);
 			const scaleZoom = this.getScaleZoomFactor(config.timeScale);
 			if (config.timeScale === 'day') {
-				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 44 * zoom)}px`;
+				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 44 * zoom)}px`;
 			} else if (config.timeScale === 'week') {
-				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
+				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
 			} else if (config.timeScale === 'month') {
-				canvasEl.style.width = `${config.labelColWidth + Math.max(900, ticks.length * 55 * zoom)}px`;
+				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 55 * zoom)}px`;
 			} else {
-				canvasEl.style.width = `calc(${config.labelColWidth}px + ${zoom * scaleZoom * 100}%)`;
+				canvasEl.style.width = `calc(${config.frozenWidth}px + ${zoom * scaleZoom * 100}%)`;
 			}
 			this.renderTimeAxis(canvasEl, min, max, config, ticks);
-			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.labelColWidth);
+			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.frozenWidth);
 			if (config.timeScale === 'day') {
-				this.renderTodayMarker(canvasEl, min, max, true, config.labelColWidth);
+				this.renderTodayMarker(canvasEl, min, max, true, config.frozenWidth);
 			}
 			this.attachRowClickHandler(canvasEl);
 
@@ -741,10 +748,16 @@ export class TimelineView extends BasesView {
 		const axisEl = containerEl.createDiv({ cls: 'bases-timeline-axis' });
 		axisEl.setAttribute('data-scale', config.timeScale);
 
-		// Sticky "Notes" header cell aligned with label column
+		// Sticky frozen-left header: "Notes" label col + one header per prop col
 		const spacerEl = axisEl.createDiv({ cls: 'bases-timeline-axis-spacer' });
 		spacerEl.createDiv({ cls: 'bases-timeline-notes-header', text: 'Notes' });
 		this.attachResizeHandle(spacerEl, config);
+		for (const prop of config.extraProps) {
+			spacerEl.createDiv({
+				cls: 'bases-timeline-prop-col-header',
+				text: this.config.getDisplayName(prop),
+			});
+		}
 
 		const timelineAxisEl = axisEl.createDiv({ cls: 'bases-timeline-axis-inner' });
 
@@ -1264,8 +1277,8 @@ export class TimelineView extends BasesView {
 
 		if (scale === 'week') {
 			const overlayEl = containerEl.createDiv({ cls: 'bases-timeline-week-grid-overlay' });
-			overlayEl.style.left = `${labelColWidth}px`;
-			overlayEl.style.width = `calc(100% - ${labelColWidth}px)`;
+			overlayEl.style.left = `var(--timeline-frozen-width, ${labelColWidth}px)`;
+			overlayEl.style.width = `calc(100% - var(--timeline-frozen-width, ${labelColWidth}px))`;
 			for (const tick of ticks) {
 				const ratio = total === 0 ? 0 : (tick.getTime() - min.getTime()) / total;
 				if (ratio < 0 || ratio > 1) continue;
@@ -1417,17 +1430,14 @@ export class TimelineView extends BasesView {
 			});
 		});
 
-		// Extra property chips — shown horizontally below the label text
-		if (config.extraProps.length > 0) {
-			const chipsEl = labelEl.createDiv({ cls: 'bases-timeline-label-chips' });
-			for (const prop of config.extraProps) {
-				const val = entry.getValue(prop);
-				if (!val || !val.isTruthy()) continue;
-				const displayName = this.config.getDisplayName(prop);
-				const chip = chipsEl.createEl('span', { cls: 'bases-timeline-label-chip' });
-				chip.createEl('span', { cls: 'bases-timeline-chip-name', text: displayName + ':' });
-				chip.createEl('span', { cls: 'bases-timeline-chip-value', text: ' ' + val.toString() });
-			}
+		// Extra property columns — one sticky cell per prop, rendered after label cell
+		for (let i = 0; i < config.extraProps.length; i++) {
+			const prop = config.extraProps[i];
+			const val = entry.getValue(prop);
+			const text = (val && val.isTruthy()) ? val.toString() : '';
+			const propCell = rowEl.createDiv({ cls: 'bases-timeline-prop-cell' });
+			propCell.style.left = `${config.labelColWidth + i * PROP_COLUMN_WIDTH_PX}px`;
+			propCell.createEl('span', { text, cls: 'bases-timeline-prop-cell-value' });
 		}
 
 
@@ -1626,8 +1636,8 @@ export class TimelineView extends BasesView {
 
 		const target = new Date(date); target.setHours(0, 0, 0, 0);
 		const ratio = (target.getTime() - min.getTime()) / total;
-		const trackWidth = scroller.scrollWidth - config.labelColWidth;
-		const scrollLeft = config.labelColWidth + ratio * trackWidth - scroller.clientWidth / 2;
+		const trackWidth = scroller.scrollWidth - config.frozenWidth;
+		const scrollLeft = config.frozenWidth + ratio * trackWidth - scroller.clientWidth / 2;
 		scroller.scrollTo({ left: Math.max(0, scrollLeft), behavior: 'smooth' });
 	}
 
