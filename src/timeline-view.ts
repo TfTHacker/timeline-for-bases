@@ -8,6 +8,7 @@ import {
 	BasesViewConfig,
 	DateValue,
 	Menu,
+	Modal,
 	NullValue,
 	Notice,
 	QueryController,
@@ -1807,8 +1808,10 @@ export class TimelineView extends BasesView {
 		menu.addItem(item => item
 			.setTitle('Delete')
 			.setIcon('trash')
-			.onClick(async () => {
-				await this.app.vault.trash(entry.file, true);
+			.onClick(() => {
+				new ConfirmDeleteModal(this.app, entry.file.basename, async () => {
+					await this.app.vault.trash(entry.file, true);
+				}).open();
 			}));
 
 		menu.showAtMouseEvent(e);
@@ -2357,5 +2360,44 @@ export class TimelineView extends BasesView {
 		if (!value || !value.isTruthy()) return null;
 		const key = value.toString();
 		return colorMap[key] || null;
+	}
+}
+
+class ConfirmDeleteModal extends Modal {
+	private fileName: string;
+	private onConfirm: () => void;
+
+	constructor(app: import('obsidian').App, fileName: string, onConfirm: () => void) {
+		super(app);
+		this.fileName = fileName;
+		this.onConfirm = onConfirm;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.addClass('tl-confirm-delete-modal');
+
+		contentEl.createEl('h2', { text: 'Delete note' });
+		contentEl.createEl('p', {
+			text: `Are you sure you want to delete "${this.fileName}"? This will move it to the system trash.`,
+		});
+
+		const btnRow = contentEl.createDiv({ cls: 'tl-confirm-delete-buttons' });
+
+		const cancelBtn = btnRow.createEl('button', { text: 'Cancel' });
+		cancelBtn.addEventListener('click', () => this.close());
+
+		const deleteBtn = btnRow.createEl('button', { text: 'Delete', cls: 'mod-warning' });
+		deleteBtn.addEventListener('click', () => {
+			this.close();
+			this.onConfirm();
+		});
+
+		// Focus the cancel button by default (safer)
+		cancelBtn.focus();
+	}
+
+	onClose() {
+		this.contentEl.empty();
 	}
 }

@@ -1063,3 +1063,15 @@ body.bases-timeline-resizing * {
 		--timeline-label-col-width: 180px;
 	}
 }
+
+/* Confirm delete modal */
+.tl-confirm-delete-modal h2 {
+	margin-bottom: 0.5em;
+}
+
+.tl-confirm-delete-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 1.5em;
+}
