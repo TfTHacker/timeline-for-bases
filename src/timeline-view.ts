@@ -1702,15 +1702,15 @@ export class TimelineView extends BasesView {
 		const endMs = localEnd.getTime();
 
 		const startOffset = startMs - min.getTime();
-		const effectiveDuration = dates.isPoint ? 0 : Math.max(0, endMs - startMs);
+		// For point entries (no end date), use 1 day duration so the bar fills the day column
+		const oneDayMs = 24 * 60 * 60 * 1000;
+		const effectiveDuration = dates.isPoint ? oneDayMs : Math.max(oneDayMs, endMs - startMs);
 
 		const left = total === 0 ? 0 : (startOffset / total) * 100;
 		const width = total === 0 ? 100 : (effectiveDuration / total) * 100;
 
 		const barEl = trackEl.createDiv({ cls: 'bases-timeline-bar' });
-		if (dates.isPoint) {
-			barEl.addClass('is-point');
-		} else if (width < 0.8) {
+		if (width < 0.8) {
 			barEl.addClass('is-compressed');
 		}
 		barEl.style.left = `${left}%`;
@@ -1744,7 +1744,7 @@ export class TimelineView extends BasesView {
 		const canResizeEnd   = config.endWritable;
 		const canEdit   = canMove || canResizeStart || canResizeEnd;
 
-		if (startPropKey && endPropKey && !dates.isPoint) {
+		if (startPropKey && endPropKey) {
 			// Resize handles — only shown for writable edges
 			if (canResizeStart) barEl.createDiv({ cls: 'bases-timeline-bar-handle is-start' });
 			if (canResizeEnd)   barEl.createDiv({ cls: 'bases-timeline-bar-handle is-end' });
