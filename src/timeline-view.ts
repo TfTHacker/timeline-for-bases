@@ -1910,9 +1910,8 @@ export class TimelineView extends BasesView {
 		const save = async () => {
 			const raw = input.value;
 			if (!raw) { popover.remove(); return; }
-			// Store as ISO string (date or datetime)
 			const d = new Date(raw + (isDatetime ? '' : 'T00:00:00'));
-			const stored = isDatetime ? d.toISOString() : raw; // date stays YYYY-MM-DD
+			const stored = isDatetime ? d.toISOString() : raw;
 			const file = this.app.vault.getFileByPath(filePath);
 			if (file) {
 				await this.app.fileManager.processFrontMatter(file, fm => { fm[propKey] = stored; });
@@ -1921,21 +1920,9 @@ export class TimelineView extends BasesView {
 			popover.remove();
 		};
 
-		const btnRow = popover.createDiv({ cls: 'tl-prop-date-btn-row' });
-		const saveBtn = btnRow.createEl('button', { cls: 'mod-cta', text: 'Save' });
-		saveBtn.addEventListener('click', save);
-		const clearBtn = btnRow.createEl('button', { text: 'Clear' });
-		clearBtn.addEventListener('click', async () => {
-			const file = this.app.vault.getFileByPath(filePath);
-			if (file) {
-				await this.app.fileManager.processFrontMatter(file, fm => { delete fm[propKey]; });
-				onSave('');
-			}
-			popover.remove();
-		});
-
+		// Auto-save on date change, close on Escape
+		input.addEventListener('change', () => { void save(); });
 		input.addEventListener('keydown', (e: KeyboardEvent) => {
-			if (e.key === 'Enter') { e.preventDefault(); void save(); }
 			if (e.key === 'Escape') { popover.remove(); }
 		});
 
