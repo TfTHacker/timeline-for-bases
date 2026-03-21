@@ -641,11 +641,20 @@ export class TimelineView extends BasesView {
 			}
 			let min = this.snapStartToScale(minDate, config.timeScale, config.weekStart);
 			let max = this.snapEndToScale(maxDate, config.timeScale, config.weekStart);
-			const weekMs = 7 * 24 * 60 * 60 * 1000;
-			if (config.timeScale === 'week') {
+			const dayMs = 24 * 60 * 60 * 1000;
+			const weekMs = 7 * dayMs;
+			if (config.timeScale === 'day') {
+				// Ensure at least 10 days are visible by padding max if needed
+				const minDays = 10;
+				const spanDays = Math.round((max.getTime() - min.getTime()) / dayMs);
+				if (spanDays < minDays) {
+					max = new Date(min.getTime() + minDays * dayMs);
+					max.setHours(23, 59, 59, 999);
+				}
+			} else if (config.timeScale === 'week') {
 				min = new Date(min.getTime() - weekMs);
 				max = new Date(max.getTime() + 2 * weekMs); // 2 extra tail weeks
-			} else if (config.timeScale !== 'day') {
+			} else {
 				max = new Date(max.getTime() + weekMs);
 			}
 
