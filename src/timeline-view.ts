@@ -1618,7 +1618,8 @@ export class TimelineView extends BasesView {
 							};
 
 							input.addEventListener('input', () => showDropdown(input.value));
-							input.addEventListener('focus', () => showDropdown(input.value, true));
+							input.addEventListener('focus', () => setTimeout(() => showDropdown(input.value, true), 0));
+							input.addEventListener('click', (ce: MouseEvent) => { ce.stopPropagation(); if (!dropdown) showDropdown(input.value, true); });
 						}
 
 						const save = async () => {
