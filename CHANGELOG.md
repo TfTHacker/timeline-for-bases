@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Improvements
+- **Delete confirmation** — right-click → Delete now shows a confirmation modal with the note name before moving it to the system trash
+
 ## 0.1.5
 
 ### Improvements
