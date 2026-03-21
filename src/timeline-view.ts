@@ -593,7 +593,8 @@ export class TimelineView extends BasesView {
 					if (isGrouped) {
 						const groupLabel = group.key && !Value.equals(group.key, NullValue.value)
 							? group.key.toString() : 'Ungrouped';
-						canvasEl.createDiv({ cls: 'bases-timeline-group', text: groupLabel });
+						const grpEl = canvasEl.createDiv({ cls: 'bases-timeline-group' });
+						grpEl.createEl('span', { cls: 'bases-timeline-group-label', text: groupLabel });
 					}
 
 					const groupEntries = group.entries;
@@ -1454,7 +1455,8 @@ export class TimelineView extends BasesView {
 			: 'Ungrouped';
 
 		if (isGrouped) {
-			const groupHeaderEl = containerEl.createDiv({ cls: 'bases-timeline-group', text: groupLabel });
+			const groupHeaderEl = containerEl.createDiv({ cls: 'bases-timeline-group' });
+			groupHeaderEl.createEl('span', { cls: 'bases-timeline-group-label', text: groupLabel });
 
 			// Make the group header a drop target
 			groupHeaderEl.addEventListener('dragover', (e) => {

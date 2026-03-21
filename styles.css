@@ -832,16 +832,23 @@
 
 /* Group headers */
 .bases-timeline-group {
-	font-weight: 600;
-	color: var(--text-normal);
+	position: relative;
 	margin-top: 12px;
 	margin-bottom: 4px;
-	padding-left: 12px;
-	padding-right: 12px;
 	font-size: 0.95rem;
 	border-bottom: 1px solid var(--background-modifier-border);
 	padding-bottom: 6px;
 	transition: background 0.1s;
+}
+
+/* Sticky group label — stays visible while scrolling horizontally */
+.bases-timeline-group-label {
+	position: sticky;
+	left: 12px;
+	font-weight: 600;
+	color: var(--text-normal);
+	display: inline-block;
+	padding-right: 12px;
 }
 .bases-timeline-group.is-drag-over {
 	background: var(--background-modifier-hover);
