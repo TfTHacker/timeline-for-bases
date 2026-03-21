@@ -839,6 +839,7 @@
 	border-bottom: 1px solid var(--background-modifier-border);
 	padding-bottom: 6px;
 	transition: background 0.1s;
+	overflow: hidden;
 }
 
 /* Sticky group label — stays visible while scrolling horizontally */
@@ -897,6 +898,7 @@
 	position: relative;
 	border-bottom: 1px solid var(--background-modifier-border-hover);
 	transition: background 0.1s ease;
+	overflow: hidden;
 }
 
 /* Sticky label cell */
