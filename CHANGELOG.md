@@ -2,8 +2,18 @@
 
 ## Unreleased
 
+### New Features
+- **Property columns** — toggle any property visible in Bases and it appears as its own sticky column to the right of the Notes label, with a header in the axis row; columns are resizable by dragging the right edge
+- **Property column editing** — hover a row to reveal a pencil icon in each property column; click to edit inline with type-aware controls:
+  - **Date / datetime** — floating date picker popover with Save and Clear buttons
+  - **Number** — numeric input, saved as a number
+  - **Checkbox** — toggles immediately on click
+  - **Text / multitext / tags** — inline text input with a suggestions dropdown showing all existing values from the vault, filterable by typing; free text always allowed
+- **Start/end date columns** — start and end date properties can now be shown as columns (previously excluded)
+
 ### Improvements
 - **Delete confirmation** — right-click → Delete now shows a confirmation modal with the note name before moving it to the system trash
+- **Single-day tasks** — tasks with only a start date (or same start/end) now render as a full 1-day bar instead of a thin point marker
 
 ## 0.1.5
 
