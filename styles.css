@@ -1227,3 +1227,11 @@ body.bases-timeline-resizing * {
 	background: var(--background-modifier-hover);
 	font-weight: 600;
 }
+
+/* Invalid date range (start after end) */
+.bases-timeline-bar.is-invalid {
+	background: var(--color-red) !important;
+	opacity: 0.75;
+	outline: 2px dashed var(--color-red);
+	outline-offset: 1px;
+}

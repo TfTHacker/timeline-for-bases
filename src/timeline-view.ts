@@ -580,7 +580,7 @@ export class TimelineView extends BasesView {
 				? this.getPropertyName(config.startDateProp!) : null;
 			const endPropName = config.endDateProp && String(config.endDateProp).startsWith('note.')
 				? this.getPropertyName(config.endDateProp) : null;
-			const entryDatesCache = new Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>();
+			const entryDatesCache = new Map<BasesEntry, { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null>();
 			const CHUNK = 50;
 
 			(async () => {
@@ -624,7 +624,7 @@ export class TimelineView extends BasesView {
 		} else {
 			// Auto-fit: compute range from all entries synchronously (small dataset path)
 			const entries = groups.flatMap(g => g.entries);
-			const entryDatesCache = new Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>();
+			const entryDatesCache = new Map<BasesEntry, { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null>();
 			let minDate: Date | null = null;
 			let maxDate: Date | null = null;
 			for (const entry of entries) {
@@ -685,28 +685,37 @@ export class TimelineView extends BasesView {
 		min: Date,
 		max: Date,
 		config: TimelineConfig
-	): { start: Date; end: Date; isPoint: boolean } | null {
-		if (startPropName) {
-			const fmCache = this.app.metadataCache.getFileCache(entry.file)?.frontmatter;
-			if (fmCache) {
-				const startRaw = fmCache[startPropName];
-				const start = this.parseRawFrontmatterDate(startRaw);
+	): { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null {
+		const fmCache = this.app.metadataCache.getFileCache(entry.file)?.frontmatter;
+		if (fmCache) {
+			const startRaw = startPropName ? fmCache[startPropName] : undefined;
+			const endRaw   = endPropName   ? fmCache[endPropName]   : undefined;
+			const hasStart = startRaw != null && startRaw !== '' && startRaw !== false;
+			const hasEnd   = endRaw   != null && endRaw   !== '' && endRaw   !== false;
 
-				// Clearly outside window — no need to check end
-				if (start && start > max) return null;
+			if (!hasStart && !hasEnd) return null;
 
-				if (start) {
-					const endRaw = endPropName ? fmCache[endPropName] : undefined;
-					const hasEnd = endRaw != null && endRaw !== '' && endRaw !== false;
-					const end = hasEnd ? this.parseRawFrontmatterDate(endRaw) : null;
-					if (!hasEnd || end) {
-						const effectiveEnd = end ?? new Date(start.getTime());
-						if (start.getTime() <= effectiveEnd.getTime()) {
-							return { start, end: effectiveEnd, isPoint: !hasEnd };
-						}
-					}
-				}
+			const start = hasStart ? this.parseRawFrontmatterDate(startRaw) : null;
+			const end   = hasEnd   ? this.parseRawFrontmatterDate(endRaw)   : null;
+
+			// End-only: use end as a 1-day bar
+			if (!hasStart && end) {
+				return { start: end, end: new Date(end.getTime()), isPoint: true };
 			}
+
+			if (!start) return this.getEntryDates(entry, config.startDateProp!, config.endDateProp!);
+			if (start > max) return null;
+
+			if (!hasEnd || !end) {
+				return { start, end: new Date(start.getTime()), isPoint: true };
+			}
+
+			// Start after end: flag invalid, swap for rendering
+			if (start.getTime() > end.getTime()) {
+				return { start: end, end: start, isPoint: false, isInvalid: true };
+			}
+
+			return { start, end, isPoint: false };
 		}
 		// Fall back to authoritative Bases API
 		return this.getEntryDates(entry, config.startDateProp!, config.endDateProp!);
@@ -1427,7 +1436,7 @@ export class TimelineView extends BasesView {
 		return ticks.filter((_, i) => i % step === 0 || i === ticks.length - 1);
 	}
 
-	private renderGroup(containerEl: HTMLElement, group: BasesEntryGroup, config: TimelineConfig, min: Date, max: Date, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>): void {
+	private renderGroup(containerEl: HTMLElement, group: BasesEntryGroup, config: TimelineConfig, min: Date, max: Date, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null>): void {
 		const isGrouped = this.data.groupedData.length > 1 || group.hasKey();
 		const groupLabel = (group.key && !Value.equals(group.key, NullValue.value))
 			? group.key.toString()
@@ -1465,7 +1474,7 @@ export class TimelineView extends BasesView {
 		});
 	}
 
-	private renderRow(containerEl: HTMLElement, entry: BasesEntry, config: TimelineConfig, min: Date, max: Date, isEven: boolean = false, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean } | null>, currentGroupLabel: string | null = null): void {
+	private renderRow(containerEl: HTMLElement, entry: BasesEntry, config: TimelineConfig, min: Date, max: Date, isEven: boolean = false, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null>, currentGroupLabel: string | null = null): void {
 		const rowEl = containerEl.createDiv({ cls: 'bases-timeline-row' });
 		if (isEven) rowEl.addClass('is-even');
 		rowEl.setAttribute('data-entry-path', entry.file.path);
@@ -1756,6 +1765,10 @@ export class TimelineView extends BasesView {
 		const width = total === 0 ? 100 : (effectiveDuration / total) * 100;
 
 		const barEl = trackEl.createDiv({ cls: 'bases-timeline-bar' });
+		if (dates.isInvalid) {
+			barEl.addClass('is-invalid');
+			barEl.setAttribute('title', 'Warning: start date is after end date');
+		}
 		if (width < 0.8) {
 			barEl.addClass('is-compressed');
 		}
@@ -2493,27 +2506,38 @@ export class TimelineView extends BasesView {
 		return entry.file.basename || entry.file.name.replace(/\.md$/i, '');
 	}
 
-	private getEntryDates(entry: BasesEntry, startProp: BasesPropertyId | null, endProp: BasesPropertyId | null): { start: Date; end: Date; isPoint: boolean } | null {
+	private getEntryDates(entry: BasesEntry, startProp: BasesPropertyId | null, endProp: BasesPropertyId | null): { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null {
 		if (!startProp || !endProp) return null;
 
 		const startValue = entry.getValue(startProp);
 		const endValue = entry.getValue(endProp);
-		const start = this.parseDateValue(startValue);
+		let start = this.parseDateValue(startValue);
 		let end = this.parseDateValue(endValue);
+
+		const hasStartValue = Boolean(startValue && startValue.isTruthy());
+		const hasEndValue   = Boolean(endValue && endValue.isTruthy());
+
+		// Neither date: not renderable
+		if (!hasStartValue && !hasEndValue) return null;
+
+		// End-only: use end as start (1-day bar)
+		if (!hasStartValue && end) {
+			return { start: end, end: new Date(end.getTime()), isPoint: true };
+		}
 
 		if (!start) return null;
 
-		const hasEndValue = Boolean(endValue && endValue.isTruthy());
-		if (hasEndValue && !end) {
-			// End date exists but is invalid/unparseable: do not force point rendering.
-			return null;
+		// Start-only: 1-day bar
+		if (!hasEndValue || !end) {
+			return { start, end: new Date(start.getTime()), isPoint: true };
 		}
 
-		const isPoint = !hasEndValue;
-		if (!end) end = new Date(start.getTime());
-		if (start.getTime() > end.getTime()) return null;
+		// Both present but start > end: flag as invalid, swap for rendering
+		if (start.getTime() > end.getTime()) {
+			return { start: end, end: start, isPoint: false, isInvalid: true };
+		}
 
-		return { start, end, isPoint };
+		return { start, end, isPoint: false };
 	}
 
 	/** Parse a raw frontmatter value (string | number | Date) into a Date, or null if invalid. */
