@@ -1589,10 +1589,13 @@ export class TimelineView extends BasesView {
 						if (propType !== 'number') {
 							const allValues = this.getVaultValuesForProp(propKey);
 
-							const showDropdown = (filter: string) => {
+							const showDropdown = (filter: string, showAll = false) => {
 								removeDropdown();
+								const lower = filter.toLowerCase();
 								const matches = allValues.filter(v =>
-									v.toLowerCase().includes(filter.toLowerCase()) && v !== filter
+									showAll
+										? true
+										: v.toLowerCase().includes(lower)
 								);
 								if (matches.length === 0) return;
 
@@ -1600,10 +1603,11 @@ export class TimelineView extends BasesView {
 								const rect = input.getBoundingClientRect();
 								dropdown.style.top = `${rect.bottom + 2}px`;
 								dropdown.style.left = `${rect.left}px`;
-								dropdown.style.minWidth = `${rect.width}px`;
+								dropdown.style.minWidth = `${Math.max(rect.width, 120)}px`;
 
-								matches.slice(0, 10).forEach(v => {
+								matches.slice(0, 12).forEach(v => {
 									const item = dropdown!.createDiv({ cls: 'bases-timeline-prop-suggestion-item', text: v });
+									if (v === filter) item.addClass('is-selected');
 									item.addEventListener('mousedown', (me: MouseEvent) => {
 										me.preventDefault();
 										input.value = v;
@@ -1614,7 +1618,7 @@ export class TimelineView extends BasesView {
 							};
 
 							input.addEventListener('input', () => showDropdown(input.value));
-							input.addEventListener('focus', () => showDropdown(input.value));
+							input.addEventListener('focus', () => showDropdown(input.value, true));
 						}
 
 						const save = async () => {

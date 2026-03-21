@@ -1222,3 +1222,8 @@ body.bases-timeline-resizing * {
 	background: var(--background-modifier-hover);
 	outline: none;
 }
+
+.bases-timeline-prop-suggestion-item.is-selected {
+	background: var(--background-modifier-hover);
+	font-weight: 600;
+}
