@@ -833,7 +833,7 @@
 /* Group headers */
 .bases-timeline-group {
 	position: relative;
-	margin-top: 12px;
+	padding-top: 12px;
 	margin-bottom: 4px;
 	font-size: 0.95rem;
 	border-bottom: 1px solid var(--background-modifier-border);
