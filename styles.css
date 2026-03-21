@@ -499,6 +499,7 @@
 }
 
 .bases-timeline-notes-header {
+	position: relative;
 	width: var(--timeline-label-col-width);
 	min-width: var(--timeline-label-col-width);
 	flex-shrink: 0;
@@ -510,8 +511,7 @@
 
 /* Prop column headers in axis */
 .bases-timeline-prop-col-header {
-	width: var(--timeline-prop-col-width, 110px);
-	min-width: var(--timeline-prop-col-width, 110px);
+	position: relative;
 	flex-shrink: 0;
 	display: flex;
 	align-items: center;
