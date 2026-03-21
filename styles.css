@@ -193,13 +193,27 @@
 	gap: 8px;
 	box-shadow: 0 4px 16px rgba(0,0,0,0.2);
 }
-.bases-timeline-jump-popover input[type="date"] {
+.bases-timeline-jump-popover input[type="date"],
+.bases-timeline-jump-popover input[type="datetime-local"] {
 	background: var(--background-secondary);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 4px;
 	padding: 4px 8px;
 	color: var(--text-normal);
 	font-size: var(--font-ui-small);
+}
+
+/* Prop date picker: stacked layout with Save/Clear row */
+.tl-prop-date-popover {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 6px;
+}
+
+.tl-prop-date-btn-row {
+	display: flex;
+	gap: 6px;
+	justify-content: flex-end;
 }
 
 /* Pencil edit button on label hover */

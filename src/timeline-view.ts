@@ -1535,48 +1535,80 @@ export class TimelineView extends BasesView {
 			const propKey = String(prop).replace(/^note\./, '');
 
 			if (isWritableProp) {
-				// Editable cell: pencil icon on hover
+				const propType = this._getPropType(propKey);
 				const valueSpan = propCell.createEl('span', { text, cls: 'bases-timeline-prop-cell-value' });
-				const editBtn = propCell.createEl('button', { cls: 'bases-timeline-prop-edit-btn' });
-				setIcon(editBtn, 'pencil');
-				editBtn.setAttribute('aria-label', 'Edit');
 
-				editBtn.addEventListener('click', (e: MouseEvent) => {
-					e.stopPropagation(); e.preventDefault();
-					editBtn.hide();
-					const input = document.createElement('input');
-					input.type = 'text';
-					input.value = valueSpan.textContent || '';
-					input.className = 'bases-timeline-prop-cell-input';
-					valueSpan.replaceWith(input);
-					input.focus(); input.select();
-					input.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
-					input.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
-
-					const save = async () => {
-						const newVal = input.value.trim();
-						input.replaceWith(valueSpan);
-						editBtn.show();
-						if (newVal !== text) {
-							valueSpan.textContent = newVal;
-							const file = this.app.vault.getFileByPath(entry.file.path);
-							if (file) {
-								await this.app.fileManager.processFrontMatter(file, fm => {
-									if (newVal === '') {
-										delete fm[propKey];
-									} else {
-										fm[propKey] = newVal;
-									}
-								});
-							}
+				if (propType === 'checkbox') {
+					// Checkbox: toggle on pencil click, no input
+					const isChecked = text === 'true';
+					if (isChecked) valueSpan.addClass('is-checked');
+					const editBtn = propCell.createEl('button', { cls: 'bases-timeline-prop-edit-btn' });
+					setIcon(editBtn, isChecked ? 'check-square' : 'square');
+					editBtn.setAttribute('aria-label', 'Toggle');
+					editBtn.addEventListener('click', async (e: MouseEvent) => {
+						e.stopPropagation(); e.preventDefault();
+						const newVal = !isChecked;
+						const file = this.app.vault.getFileByPath(entry.file.path);
+						if (file) {
+							await this.app.fileManager.processFrontMatter(file, fm => { fm[propKey] = newVal; });
 						}
-					};
-					input.addEventListener('blur', save);
-					input.addEventListener('keydown', (ke: KeyboardEvent) => {
-						if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
-						if (ke.key === 'Escape') { input.value = text; input.blur(); }
 					});
-				});
+				} else if (propType === 'date' || propType === 'datetime') {
+					// Date/datetime: pencil opens a floating date picker
+					const editBtn = propCell.createEl('button', { cls: 'bases-timeline-prop-edit-btn' });
+					setIcon(editBtn, 'pencil');
+					editBtn.setAttribute('aria-label', 'Edit date');
+					editBtn.addEventListener('click', (e: MouseEvent) => {
+						e.stopPropagation(); e.preventDefault();
+						this._showPropDatePicker(propCell, entry.file.path, propKey, propType, text, (newVal) => {
+							valueSpan.textContent = newVal;
+						});
+					});
+				} else {
+					// Text / number / multitext / tags / anything else: inline input
+					const editBtn = propCell.createEl('button', { cls: 'bases-timeline-prop-edit-btn' });
+					setIcon(editBtn, 'pencil');
+					editBtn.setAttribute('aria-label', 'Edit');
+
+					editBtn.addEventListener('click', (e: MouseEvent) => {
+						e.stopPropagation(); e.preventDefault();
+						editBtn.hide();
+						const input = document.createElement('input');
+						input.type = propType === 'number' ? 'number' : 'text';
+						input.value = valueSpan.textContent || '';
+						input.className = 'bases-timeline-prop-cell-input';
+						valueSpan.replaceWith(input);
+						input.focus(); input.select();
+						input.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
+						input.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
+
+						const save = async () => {
+							const newVal = input.value.trim();
+							input.replaceWith(valueSpan);
+							editBtn.show();
+							if (newVal !== text) {
+								valueSpan.textContent = newVal;
+								const file = this.app.vault.getFileByPath(entry.file.path);
+								if (file) {
+									await this.app.fileManager.processFrontMatter(file, fm => {
+										if (newVal === '') {
+											delete fm[propKey];
+										} else if (propType === 'number') {
+											fm[propKey] = parseFloat(newVal);
+										} else {
+											fm[propKey] = newVal;
+										}
+									});
+								}
+							}
+						};
+						input.addEventListener('blur', save);
+						input.addEventListener('keydown', (ke: KeyboardEvent) => {
+							if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
+							if (ke.key === 'Escape') { input.value = text; input.blur(); }
+						});
+					});
+				}
 			} else {
 				// Read-only cell
 				propCell.createEl('span', { text, cls: 'bases-timeline-prop-cell-value is-readonly' });
@@ -1782,6 +1814,91 @@ export class TimelineView extends BasesView {
 		const trackWidth = scroller.scrollWidth - config.frozenWidth;
 		const scrollLeft = config.frozenWidth + ratio * trackWidth - scroller.clientWidth / 2;
 		scroller.scrollTo({ left: Math.max(0, scrollLeft), behavior: 'smooth' });
+	}
+
+	/** Returns the Obsidian metadata type for a frontmatter property name, e.g. 'date', 'number', 'checkbox'. */
+	private _getPropType(propKey: string): string {
+		try {
+			const info = (this.app as any).metadataTypeManager?.getPropertyInfo(propKey);
+			return info?.type ?? 'text';
+		} catch {
+			return 'text';
+		}
+	}
+
+	/** Show a floating date picker popover anchored to a prop cell for editing date/datetime props. */
+	private _showPropDatePicker(
+		anchor: HTMLElement,
+		filePath: string,
+		propKey: string,
+		propType: string,
+		currentValue: string,
+		onSave: (newVal: string) => void,
+	): void {
+		// Remove any existing prop date picker
+		document.getElementById('tl-prop-date-popover')?.remove();
+
+		const isDatetime = propType === 'datetime';
+		const popover = document.body.createDiv({ attr: { id: 'tl-prop-date-popover' }, cls: 'bases-timeline-jump-popover tl-prop-date-popover' });
+		const rect = anchor.getBoundingClientRect();
+		popover.style.top = `${rect.bottom + 4}px`;
+		popover.style.left = `${rect.left}px`;
+
+		const input = popover.createEl('input', { type: isDatetime ? 'datetime-local' : 'date' });
+		// Pre-fill with current value (ISO date string or YYYY-MM-DD)
+		if (currentValue) {
+			try {
+				const d = new Date(currentValue);
+				if (!isNaN(d.getTime())) {
+					input.value = isDatetime
+						? d.toISOString().slice(0, 16)
+						: d.toISOString().slice(0, 10);
+				} else {
+					input.value = currentValue;
+				}
+			} catch { input.value = currentValue; }
+		}
+
+		const save = async () => {
+			const raw = input.value;
+			if (!raw) { popover.remove(); return; }
+			// Store as ISO string (date or datetime)
+			const d = new Date(raw + (isDatetime ? '' : 'T00:00:00'));
+			const stored = isDatetime ? d.toISOString() : raw; // date stays YYYY-MM-DD
+			const file = this.app.vault.getFileByPath(filePath);
+			if (file) {
+				await this.app.fileManager.processFrontMatter(file, fm => { fm[propKey] = stored; });
+				onSave(raw);
+			}
+			popover.remove();
+		};
+
+		const btnRow = popover.createDiv({ cls: 'tl-prop-date-btn-row' });
+		const saveBtn = btnRow.createEl('button', { cls: 'mod-cta', text: 'Save' });
+		saveBtn.addEventListener('click', save);
+		const clearBtn = btnRow.createEl('button', { text: 'Clear' });
+		clearBtn.addEventListener('click', async () => {
+			const file = this.app.vault.getFileByPath(filePath);
+			if (file) {
+				await this.app.fileManager.processFrontMatter(file, fm => { delete fm[propKey]; });
+				onSave('');
+			}
+			popover.remove();
+		});
+
+		input.addEventListener('keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Enter') { e.preventDefault(); void save(); }
+			if (e.key === 'Escape') { popover.remove(); }
+		});
+
+		const dismiss = (e: MouseEvent) => {
+			if (!popover.contains(e.target as Node)) {
+				popover.remove();
+				document.removeEventListener('mousedown', dismiss);
+			}
+		};
+		setTimeout(() => document.addEventListener('mousedown', dismiss), 0);
+		input.focus();
 	}
 
 	private _showJumpToDate(anchor: HTMLElement, evt: MouseEvent): void {
