@@ -34,6 +34,8 @@ interface TimelineConfig {
 	/** Whether the start/end date properties are writable frontmatter fields (not formulas or file metadata). */
 	startWritable: boolean;
 	endWritable: boolean;
+	/** Ordered list of extra properties to display as chips in the label column. */
+	extraProps: BasesPropertyId[];
 }
 
 const LABEL_COLUMN_WIDTH_PX = 175;
@@ -240,6 +242,14 @@ export class TimelineView extends BasesView {
 		const startWritable = isWritable(startDateProp);
 		const endWritable   = isWritable(endDateProp);
 
+		// Extra props: user-ordered visible properties, excluding those already shown elsewhere
+		const excludedProps = new Set(
+			[startDateProp, endDateProp, labelProp, colorProp]
+				.filter(Boolean)
+				.map(p => JSON.stringify(p))
+		);
+		const extraProps = this.config.getOrder().filter(p => !excludedProps.has(JSON.stringify(p)));
+
 		return {
 			startDateProp,
 			endDateProp,
@@ -253,6 +263,7 @@ export class TimelineView extends BasesView {
 			groupByProp,
 			startWritable,
 			endWritable,
+			extraProps,
 		};
 	}
 
@@ -1396,7 +1407,8 @@ export class TimelineView extends BasesView {
 
 		const label = this.getEntryLabel(entry, config.labelProp);
 		const labelEl = rowEl.createDiv({ cls: 'bases-timeline-label' });
-		const labelSpan = labelEl.createEl('span', { text: label });
+		const labelInnerEl = labelEl.createDiv({ cls: 'bases-timeline-label-inner' });
+		const labelSpan = labelInnerEl.createEl('span', { text: label });
 		labelEl.addEventListener('mouseover', (e: MouseEvent) => {
 			this.app.workspace.trigger('hover-link', {
 				event: e, source: 'timeline-for-bases',
@@ -1404,6 +1416,19 @@ export class TimelineView extends BasesView {
 				linktext: entry.file.path,
 			});
 		});
+
+		// Extra property chips — shown horizontally below the label text
+		if (config.extraProps.length > 0) {
+			const chipsEl = labelEl.createDiv({ cls: 'bases-timeline-label-chips' });
+			for (const prop of config.extraProps) {
+				const val = entry.getValue(prop);
+				if (!val || !val.isTruthy()) continue;
+				const displayName = this.config.getDisplayName(prop);
+				const chip = chipsEl.createEl('span', { cls: 'bases-timeline-label-chip' });
+				chip.createEl('span', { cls: 'bases-timeline-chip-name', text: displayName + ':' });
+				chip.createEl('span', { cls: 'bases-timeline-chip-value', text: ' ' + val.toString() });
+			}
+		}
 
 
 
