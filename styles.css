@@ -1229,9 +1229,25 @@ body.bases-timeline-resizing * {
 }
 
 /* Invalid date range (start after end) */
-.bases-timeline-bar.is-invalid {
-	background: var(--color-red) !important;
-	opacity: 0.75;
-	outline: 2px dashed var(--color-red);
-	outline-offset: 1px;
+/* Row with start date after end date — no bar, row highlighted red */
+.bases-timeline-row.is-date-invalid {
+	background: color-mix(in srgb, var(--color-red) 12%, transparent) !important;
+}
+
+.bases-timeline-row.is-date-invalid .bases-timeline-label,
+.bases-timeline-row.is-date-invalid .bases-timeline-prop-cell {
+	background: color-mix(in srgb, var(--color-red) 12%, var(--background-primary)) !important;
+	color: var(--color-red);
+}
+
+.bases-timeline-row.is-date-invalid .bases-timeline-track::after {
+	content: '⚠ start date is after end date';
+	position: absolute;
+	left: 8px;
+	top: 50%;
+	transform: translateY(-50%);
+	font-size: 0.75rem;
+	color: var(--color-red);
+	opacity: 0.8;
+	pointer-events: none;
 }

@@ -1764,11 +1764,13 @@ export class TimelineView extends BasesView {
 		const left = total === 0 ? 0 : (startOffset / total) * 100;
 		const width = total === 0 ? 100 : (effectiveDuration / total) * 100;
 
-		const barEl = trackEl.createDiv({ cls: 'bases-timeline-bar' });
 		if (dates.isInvalid) {
-			barEl.addClass('is-invalid');
-			barEl.setAttribute('title', 'Warning: start date is after end date');
+			rowEl.addClass('is-date-invalid');
+			rowEl.setAttribute('title', 'Warning: start date is after end date');
+			return;
 		}
+
+		const barEl = trackEl.createDiv({ cls: 'bases-timeline-bar' });
 		if (width < 0.8) {
 			barEl.addClass('is-compressed');
 		}
