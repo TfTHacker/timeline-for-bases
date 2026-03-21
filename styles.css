@@ -237,6 +237,47 @@
 	outline: none;
 }
 
+/* Prop cell pencil edit button */
+.bases-timeline-prop-edit-btn {
+	display: none;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	width: 16px;
+	height: 16px;
+	border: none;
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	border-radius: 3px;
+	padding: 0;
+	margin-left: 3px;
+}
+.bases-timeline-prop-edit-btn svg { width: 10px; height: 10px; }
+.bases-timeline-prop-edit-btn:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.bases-timeline-row:hover .bases-timeline-prop-edit-btn,
+.bases-timeline-row.is-active-hover .bases-timeline-prop-edit-btn {
+	display: inline-flex;
+}
+
+/* Inline prop cell edit input */
+.bases-timeline-prop-cell-input {
+	width: 100%;
+	background: var(--background-primary);
+	border: 1px solid var(--color-accent);
+	border-radius: 3px;
+	padding: 1px 4px;
+	color: var(--text-normal);
+	font-size: 0.78rem;
+	outline: none;
+	min-width: 0;
+}
+
+/* Read-only prop value — slightly more faded */
+.bases-timeline-prop-cell-value.is-readonly {
+	color: var(--text-faint);
+}
+
 .bases-timeline-controls-toggle {
 	display: inline-flex;
 	align-items: center;
@@ -883,8 +924,6 @@
 .bases-timeline-prop-cell {
 	position: sticky;
 	z-index: 4;
-	width: var(--timeline-prop-col-width, 110px);
-	min-width: var(--timeline-prop-col-width, 110px);
 	flex-shrink: 0;
 	display: flex;
 	align-items: center;

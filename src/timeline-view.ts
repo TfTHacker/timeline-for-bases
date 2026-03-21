@@ -36,6 +36,8 @@ interface TimelineConfig {
 	endWritable: boolean;
 	/** Ordered list of extra properties to display as columns. */
 	extraProps: BasesPropertyId[];
+	/** Width (px) for each extra prop column, keyed by JSON.stringify(propId). */
+	propColWidths: Record<string, number>;
 	/** Total width of the frozen left zone (label col + all prop cols). */
 	frozenWidth: number;
 }
@@ -255,7 +257,17 @@ export class TimelineView extends BasesView {
 				.map(p => JSON.stringify(p))
 		);
 		const extraProps = this.config.getOrder().filter(p => !excludedProps.has(JSON.stringify(p)));
-		const frozenWidth = labelColWidth + extraProps.length * PROP_COLUMN_WIDTH_PX;
+
+		// Per-prop column widths (persisted in config)
+		const savedWidths = (this.config.get('propColWidths') ?? {}) as Record<string, number>;
+		const propColWidths: Record<string, number> = {};
+		let frozenWidth = labelColWidth;
+		for (const prop of extraProps) {
+			const key = JSON.stringify(prop);
+			const w = typeof savedWidths[key] === 'number' ? savedWidths[key] : PROP_COLUMN_WIDTH_PX;
+			propColWidths[key] = w;
+			frozenWidth += w;
+		}
 
 		return {
 			startDateProp,
@@ -271,6 +283,7 @@ export class TimelineView extends BasesView {
 			startWritable,
 			endWritable,
 			extraProps,
+			propColWidths,
 			frozenWidth,
 		};
 	}
@@ -751,13 +764,18 @@ export class TimelineView extends BasesView {
 
 		// Sticky frozen-left header: "Notes" label col + one header per prop col
 		const spacerEl = axisEl.createDiv({ cls: 'bases-timeline-axis-spacer' });
-		spacerEl.createDiv({ cls: 'bases-timeline-notes-header', text: 'Notes' });
-		this.attachResizeHandle(spacerEl, config);
+		const notesHeaderEl = spacerEl.createDiv({ cls: 'bases-timeline-notes-header', text: 'Notes' });
+		this.attachResizeHandle(notesHeaderEl, config);
 		for (const prop of config.extraProps) {
-			spacerEl.createDiv({
+			const key = JSON.stringify(prop);
+			const w = config.propColWidths[key] ?? PROP_COLUMN_WIDTH_PX;
+			const headerCell = spacerEl.createDiv({
 				cls: 'bases-timeline-prop-col-header',
 				text: this.config.getDisplayName(prop),
 			});
+			headerCell.style.width = `${w}px`;
+			headerCell.style.minWidth = `${w}px`;
+			this.attachPropColResizeHandle(headerCell, prop, config);
 		}
 
 		const timelineAxisEl = axisEl.createDiv({ cls: 'bases-timeline-axis-inner' });
@@ -1083,6 +1101,74 @@ export class TimelineView extends BasesView {
 			document.addEventListener('mouseup', onMouseUp);
 			document.body.addClass('bases-timeline-resizing');
 		});
+	}
+
+	private attachPropColResizeHandle(headerCell: HTMLElement, prop: BasesPropertyId, config: TimelineConfig): void {
+		const handle = headerCell.createDiv({ cls: 'bases-timeline-resize-handle' });
+		const key = JSON.stringify(prop);
+		const PROP_MIN = 60;
+		const PROP_MAX = 400;
+		let startX = 0;
+		let startWidth = 0;
+
+		const onMouseMove = (e: MouseEvent) => {
+			const delta = e.clientX - startX;
+			const newWidth = Math.max(PROP_MIN, Math.min(PROP_MAX, startWidth + delta));
+			// Update all cells for this prop column via CSS custom property on containerEl
+			this.containerEl.style.setProperty(`--tl-prop-col-width-${key.replace(/[^a-z0-9]/gi, '_')}`, `${newWidth}px`);
+			// Also directly update header cell for live resize feel
+			headerCell.style.width = `${newWidth}px`;
+			headerCell.style.minWidth = `${newWidth}px`;
+			// Update all row cells for this prop
+			this.containerEl.querySelectorAll<HTMLElement>(`.bases-timeline-prop-cell[data-prop-key="${CSS.escape(key)}"]`).forEach(cell => {
+				cell.style.width = `${newWidth}px`;
+				cell.style.minWidth = `${newWidth}px`;
+			});
+			// Recompute frozenWidth on container
+			this._updateFrozenWidth(config, key, newWidth);
+		};
+
+		const onMouseUp = (e: MouseEvent) => {
+			document.removeEventListener('mousemove', onMouseMove);
+			document.removeEventListener('mouseup', onMouseUp);
+			document.body.removeClass('bases-timeline-resizing');
+			const delta = e.clientX - startX;
+			const newWidth = Math.max(PROP_MIN, Math.min(PROP_MAX, startWidth + delta));
+			// Persist: read current saved widths, update this key, save back
+			const saved = (this.config.get('propColWidths') ?? {}) as Record<string, number>;
+			saved[key] = newWidth;
+			this.config.set('propColWidths', saved);
+		};
+
+		handle.addEventListener('mousedown', (e: MouseEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
+			startX = e.clientX;
+			startWidth = parseInt(headerCell.style.width || String(config.propColWidths[key] ?? PROP_COLUMN_WIDTH_PX), 10);
+			document.addEventListener('mousemove', onMouseMove);
+			document.addEventListener('mouseup', onMouseUp);
+			document.body.addClass('bases-timeline-resizing');
+		});
+	}
+
+	private _updateFrozenWidth(config: TimelineConfig, changedKey: string, changedWidth: number): void {
+		// Recompute frozenWidth from current header cells
+		let frozen = config.labelColWidth;
+		for (const prop of config.extraProps) {
+			const k = JSON.stringify(prop);
+			frozen += (k === changedKey ? changedWidth : (config.propColWidths[k] ?? PROP_COLUMN_WIDTH_PX));
+		}
+		this.containerEl.style.setProperty('--timeline-frozen-width', `${frozen}px`);
+		// Update left offsets on all prop cells
+		let left = config.labelColWidth;
+		for (const prop of config.extraProps) {
+			const k = JSON.stringify(prop);
+			const w = k === changedKey ? changedWidth : (config.propColWidths[k] ?? PROP_COLUMN_WIDTH_PX);
+			this.containerEl.querySelectorAll<HTMLElement>(`.bases-timeline-prop-cell[data-prop-key="${CSS.escape(k)}"]`).forEach(cell => {
+				cell.style.left = `${left}px`;
+			});
+			left += w;
+		}
 	}
 
 	private attachRowClickHandler(canvasEl: HTMLElement): void {
@@ -1432,13 +1518,69 @@ export class TimelineView extends BasesView {
 		});
 
 		// Extra property columns — one sticky cell per prop, rendered after label cell
-		for (let i = 0; i < config.extraProps.length; i++) {
-			const prop = config.extraProps[i];
+		let propLeft = config.labelColWidth;
+		for (const prop of config.extraProps) {
+			const key = JSON.stringify(prop);
+			const w = config.propColWidths[key] ?? PROP_COLUMN_WIDTH_PX;
 			const val = entry.getValue(prop);
 			const text = (val && val.isTruthy()) ? val.toString() : '';
 			const propCell = rowEl.createDiv({ cls: 'bases-timeline-prop-cell' });
-			propCell.style.left = `${config.labelColWidth + i * PROP_COLUMN_WIDTH_PX}px`;
-			propCell.createEl('span', { text, cls: 'bases-timeline-prop-cell-value' });
+			propCell.setAttribute('data-prop-key', key);
+			propCell.style.left = `${propLeft}px`;
+			propCell.style.width = `${w}px`;
+			propCell.style.minWidth = `${w}px`;
+			propLeft += w;
+
+			const isWritableProp = String(prop).startsWith('note.');
+			const propKey = String(prop).replace(/^note\./, '');
+
+			if (isWritableProp) {
+				// Editable cell: pencil icon on hover
+				const valueSpan = propCell.createEl('span', { text, cls: 'bases-timeline-prop-cell-value' });
+				const editBtn = propCell.createEl('button', { cls: 'bases-timeline-prop-edit-btn' });
+				setIcon(editBtn, 'pencil');
+				editBtn.setAttribute('aria-label', 'Edit');
+
+				editBtn.addEventListener('click', (e: MouseEvent) => {
+					e.stopPropagation(); e.preventDefault();
+					editBtn.hide();
+					const input = document.createElement('input');
+					input.type = 'text';
+					input.value = valueSpan.textContent || '';
+					input.className = 'bases-timeline-prop-cell-input';
+					valueSpan.replaceWith(input);
+					input.focus(); input.select();
+					input.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
+					input.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
+
+					const save = async () => {
+						const newVal = input.value.trim();
+						input.replaceWith(valueSpan);
+						editBtn.show();
+						if (newVal !== text) {
+							valueSpan.textContent = newVal;
+							const file = this.app.vault.getFileByPath(entry.file.path);
+							if (file) {
+								await this.app.fileManager.processFrontMatter(file, fm => {
+									if (newVal === '') {
+										delete fm[propKey];
+									} else {
+										fm[propKey] = newVal;
+									}
+								});
+							}
+						}
+					};
+					input.addEventListener('blur', save);
+					input.addEventListener('keydown', (ke: KeyboardEvent) => {
+						if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
+						if (ke.key === 'Escape') { input.value = text; input.blur(); }
+					});
+				});
+			} else {
+				// Read-only cell
+				propCell.createEl('span', { text, cls: 'bases-timeline-prop-cell-value is-readonly' });
+			}
 		}
 
 
