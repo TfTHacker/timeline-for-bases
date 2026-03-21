@@ -1821,9 +1821,9 @@ export class TimelineView extends BasesView {
 		try {
 			const mtm = (this.app as any).metadataTypeManager;
 			if (!mtm) return 'text';
-			// getTypeInfo(name) → { type: 'date' | 'datetime' | 'number' | ... }
-			const info = mtm.getTypeInfo?.(propKey) ?? mtm.properties?.[propKey];
-			return info?.type ?? 'text';
+			const info = mtm.properties?.[propKey];
+			// Obsidian stores type as `widget` on the property info object
+			return info?.widget ?? info?.type ?? 'text';
 		} catch {
 			return 'text';
 		}
