@@ -1909,10 +1909,18 @@ export class TimelineView extends BasesView {
 
 		const save = async () => {
 			const raw = input.value;
-			if (!raw) { popover.remove(); return; }
+			const file = this.app.vault.getFileByPath(filePath);
+			if (!raw) {
+				// Empty = user cleared the date
+				if (file) {
+					await this.app.fileManager.processFrontMatter(file, fm => { delete fm[propKey]; });
+					onSave('');
+				}
+				popover.remove();
+				return;
+			}
 			const d = new Date(raw + (isDatetime ? '' : 'T00:00:00'));
 			const stored = isDatetime ? d.toISOString() : raw;
-			const file = this.app.vault.getFileByPath(filePath);
 			if (file) {
 				await this.app.fileManager.processFrontMatter(file, fm => { fm[propKey] = stored; });
 				onSave(raw);
