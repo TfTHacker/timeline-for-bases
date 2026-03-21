@@ -560,7 +560,7 @@ export class TimelineView extends BasesView {
 			const zoom = Math.max(config.zoom, 1);
 			if (config.timeScale === 'day') {
 				const dayPx = Math.min(60, 44 * zoom);
-				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * dayPx)}px`;
+				canvasEl.style.width = `${config.frozenWidth + ticks.length * dayPx}px`;
 			} else if (config.timeScale === 'week') {
 				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
 			} else if (config.timeScale === 'month') {
@@ -658,7 +658,7 @@ export class TimelineView extends BasesView {
 			const scaleZoom = this.getScaleZoomFactor(config.timeScale);
 			if (config.timeScale === 'day') {
 				const dayPx = Math.min(60, 44 * zoom);
-				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * dayPx)}px`;
+				canvasEl.style.width = `${config.frozenWidth + ticks.length * dayPx}px`;
 			} else if (config.timeScale === 'week') {
 				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
 			} else if (config.timeScale === 'month') {
