@@ -565,6 +565,12 @@ export class TimelineView extends BasesView {
 				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
 			} else if (config.timeScale === 'month') {
 				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 55 * zoom)}px`;
+			} else if (config.timeScale === 'quarter') {
+				const qPx = Math.min(200, 120 * zoom);
+				canvasEl.style.width = `${config.frozenWidth + Math.max(4, ticks.length) * qPx}px`;
+			} else if (config.timeScale === 'year') {
+				const yPx = Math.min(150, 90 * zoom);
+				canvasEl.style.width = `${config.frozenWidth + Math.max(3, ticks.length) * yPx}px`;
 			} else {
 				canvasEl.style.width = `calc(${config.frozenWidth}px + ${zoom * this.getScaleZoomFactor(config.timeScale) * 100}%)`;
 			}
@@ -673,6 +679,12 @@ export class TimelineView extends BasesView {
 				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
 			} else if (config.timeScale === 'month') {
 				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 55 * zoom)}px`;
+			} else if (config.timeScale === 'quarter') {
+				const qPx = Math.min(200, 120 * zoom);
+				canvasEl.style.width = `${config.frozenWidth + Math.max(4, ticks.length) * qPx}px`;
+			} else if (config.timeScale === 'year') {
+				const yPx = Math.min(150, 90 * zoom);
+				canvasEl.style.width = `${config.frozenWidth + Math.max(3, ticks.length) * yPx}px`;
 			} else {
 				canvasEl.style.width = `calc(${config.frozenWidth}px + ${zoom * scaleZoom * 100}%)`;
 			}
