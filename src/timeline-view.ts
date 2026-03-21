@@ -660,7 +660,23 @@ export class TimelineView extends BasesView {
 				}
 			} else if (config.timeScale === 'week') {
 				min = new Date(min.getTime() - weekMs);
-				max = new Date(max.getTime() + 2 * weekMs); // 2 extra tail weeks
+				max = new Date(max.getTime() + 2 * weekMs);
+			} else if (config.timeScale === 'quarter') {
+				// Ensure at least 4 quarters visible
+				const spanMs = max.getTime() - min.getTime();
+				const quarterMs = 3 * 30.5 * dayMs;
+				if (spanMs < 4 * quarterMs) {
+					max = new Date(min.getTime() + 4 * quarterMs);
+					max = this.snapEndToScale(max, 'quarter');
+				}
+			} else if (config.timeScale === 'year') {
+				// Ensure at least 3 years visible
+				const spanMs = max.getTime() - min.getTime();
+				const yearMs = 365 * dayMs;
+				if (spanMs < 3 * yearMs) {
+					max = new Date(min.getTime() + 3 * yearMs);
+					max = this.snapEndToScale(max, 'year');
+				}
 			} else {
 				max = new Date(max.getTime() + weekMs);
 			}
