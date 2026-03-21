@@ -247,9 +247,10 @@ export class TimelineView extends BasesView {
 		const startWritable = isWritable(startDateProp);
 		const endWritable   = isWritable(endDateProp);
 
-		// Extra props: user-ordered visible properties, excluding those already shown elsewhere
+		// Extra props: user-ordered visible properties, excluding label and color (shown elsewhere)
+		// Start/end date props are intentionally NOT excluded — users may want them as columns too
 		const excludedProps = new Set(
-			[startDateProp, endDateProp, labelProp, colorProp]
+			[labelProp, colorProp]
 				.filter(Boolean)
 				.map(p => JSON.stringify(p))
 		);
