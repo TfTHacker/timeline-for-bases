@@ -1003,12 +1003,14 @@ export class TimelineView extends BasesView {
 	}
 
 	private cacheDayLabelGeometry(containerEl: HTMLElement): void {
+		const containerRect = containerEl.getBoundingClientRect();
 		const labels = Array.from(containerEl.querySelectorAll<HTMLElement>('.bases-timeline-axis-label.is-day-label'));
 		this._dayLabelSlots = labels.map((label) => {
 			const raw = label.getAttribute('data-date');
 			const date = raw ? this.parseRawFrontmatterDate(raw) : null;
-			const left = label.offsetLeft;
-			const width = label.offsetWidth;
+			const rect = label.getBoundingClientRect();
+			const left = rect.left - containerRect.left;
+			const width = rect.width;
 			return date && width > 0 ? {
 				date,
 				left,
@@ -2464,6 +2466,7 @@ export class TimelineView extends BasesView {
 
 			// Single mousedown on the bar — detect drag type from click position relative to bar
 			barEl.addEventListener('mousedown', e => {
+				if (e.button !== 0) return;
 				e.preventDefault();
 				this.containerEl.focus();
 
@@ -2503,6 +2506,7 @@ export class TimelineView extends BasesView {
 			// Right-click context menu
 			barEl.addEventListener('contextmenu', (e: MouseEvent) => {
 				e.preventDefault();
+				this._cancelActiveDrag();
 				this._showContextMenu(e, entry, startPropKey, endPropKey, dates!.start, dates!.end, canEdit, config.startWritable, config.endWritable);
 			});
 		}
@@ -2992,6 +2996,16 @@ export class TimelineView extends BasesView {
 		if (!this._dragTooltipEl) return;
 		const fmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
 		this._dragTooltipEl.textContent = `${fmt.format(start)} → ${fmt.format(end)}`;
+	}
+
+	private _cancelActiveDrag(): void {
+		if (!this._dragState) return;
+		this._dragState.barEl.removeClass('is-dragging');
+		this._dragState = null;
+		document.body.style.cursor = '';
+		(document.body.style as CSSStyleDeclaration & { userSelect: string }).userSelect = '';
+		this._dragTooltipEl?.remove();
+		this._dragTooltipEl = null;
 	}
 
 	private _onDragMove(e: MouseEvent): void {

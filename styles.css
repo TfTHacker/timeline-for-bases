@@ -916,6 +916,10 @@
 	cursor: pointer;
 }
 
+.bases-timeline-group.is-collapsed {
+	margin-bottom: 0;
+}
+
 /* Match Bases group headers: sticky property + value pair */
 .bases-timeline-group .bases-group-heading {
 	position: sticky;
