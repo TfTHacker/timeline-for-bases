@@ -1,19 +1,26 @@
 # Changelog
 
-## Unreleased
+## 0.1.6
 
 ### New Features
-- **Property columns** — toggle any property visible in Bases and it appears as its own sticky column to the right of the Notes label, with a header in the axis row; columns are resizable by dragging the right edge
-- **Property column editing** — hover a row to reveal a pencil icon in each property column; click to edit inline with type-aware controls:
-  - **Date / datetime** — floating date picker popover with Save and Clear buttons
-  - **Number** — numeric input, saved as a number
-  - **Checkbox** — toggles immediately on click
-  - **Text / multitext / tags** — inline text input with a suggestions dropdown showing all existing values from the vault, filterable by typing; free text always allowed
-- **Start/end date columns** — start and end date properties can now be shown as columns (previously excluded)
+- **Sticky property columns** — any property you show in Bases can also appear as its own frozen column in the timeline, so you can keep important details visible while scrolling
+- **Click-to-edit cells** — editable columns now open directly when clicked, including dates, numbers, checkboxes, text, multitext, and tags
+- **Start and end date columns** — the same date fields used for the bars can also be shown as normal columns in the timeline
+- **Collapsible groups** — grouped timelines can now be collapsed one section at a time, or all at once with collapse/expand controls in the header
+- **Column sorting and reordering** — frozen columns can be reordered by dragging, and sorting can be changed from the timeline headers
 
 ### Improvements
-- **Delete confirmation** — right-click → Delete now shows a confirmation modal with the note name before moving it to the system trash
-- **Single-day tasks** — tasks with only a start date (or same start/end) now render as a full 1-day bar instead of a thin point marker
+- **Closer match to Bases** — the first property in the Bases column order is now used as the main frozen column automatically, with matching property icons, sort indicators, and group header styling
+- **Safer date handling** — the timeline now treats dates as calendar days, even when notes store a time, which avoids off-by-one-day problems across time zones
+- **Better sample content** — the sample base now creates 20 more realistic project-style tasks instead of the earlier smaller demo set
+- **Clearer day view** — day headers now show weekday information more clearly and adapt better when the visible date range gets tight
+
+### Bug Fixes
+- **More reliable drag and resize in day view** — bars now snap to the day under your cursor more consistently, including around tricky daylight saving time boundaries
+- **Right-click no longer starts dragging** — opening the bar context menu no longer leaves the task moving in the background
+- **Filename column edits rename the note correctly** — editing a file-name-based primary column now renames the note instead of creating a fake frontmatter property
+- **Delete confirmation** — deleting a note from the bar menu now asks for confirmation first
+- **Single-day tasks look correct** — notes with only one day of work now render as a full one-day bar instead of a tiny marker
 
 ## 0.1.5
 

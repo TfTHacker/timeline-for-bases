@@ -44,8 +44,8 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 - **5 time scales** — Day, Week, Month, Quarter, Year; switch instantly
 - **Today button** — scrolls the timeline to center today in view
 - **Jump to date** — date picker popover to scroll directly to any date
-- **Zoom** — 1× to 5× zoom slider
 - **Today marker** — highlighted line for the current date (Day view)
+- **Adaptive day headers** — day view shows weekday and date with compact formatting based on available width
 - **Day separator lines** — faint vertical grid lines mark each day column boundary
 - **Week start** — Monday or Sunday, set in plugin settings
 
@@ -58,7 +58,10 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 - **Double-click bar** — opens the note; single-click the label also opens it
 
 **Groups**
+- **Collapsible groups** — grouped sections can be collapsed or expanded individually
+- **Collapse all / expand all** — grouped views expose header actions to toggle every section at once
 - **Drag between groups** — grab the grip handle on any row and drop it into another group to reassign it; the note's frontmatter is updated automatically
+- **Persistent group state** — collapsed groups are remembered per base view
 - **Undo support** — group changes are undoable like any other edit
 
 **Working with dates**
@@ -66,63 +69,37 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 - **Clear dates** — right-click any bar → "Clear dates" to remove the dates from the note; the row goes back to dateless state
 
 **Editing**
-- **Inline label editing** — pencil icon appears on row hover; click to rename the task in place
+- **Click-to-edit cells** — editable property cells open inline on click, more like native Bases
+- **Inline property editing** — visible property columns support type-aware editing for dates, numbers, checkboxes, text, multitext, and tags
 - **Undo / redo** — Ctrl+Z / Ctrl+Y (also toolbar buttons); 50-step history covers all edits including group changes
 
 **Display**
 - **Color by property** — map any frontmatter value to a color from a theme-adaptive palette
-- **Label by property** — choose which frontmatter field appears as the bar label
-- **Resizable label column** — drag to adjust width; persisted per view
+- **Sticky property columns** — any property visible in Bases can appear as its own frozen column to the right of the primary column
+- **Primary column from Bases order** — the first ordered Bases property becomes the primary frozen column automatically
+- **Resizable frozen columns** — primary and property columns can be resized and their widths persist per view
 - **Theme-adaptive colors** — all palette colors are Obsidian CSS variables; they shift with your theme automatically
 - **Point tasks** — notes with only a start date render as a single-day marker
-- **Sorting** — handled by Bases natively; the timeline respects whatever sort order you configure
 
 **Other**
 - **Export PNG** — captures the current timeline view and saves it to the vault root
-- **Create Sample Base** — settings button that generates a "Timeline Sample" folder with 10 vacation-planning tasks and a ready-to-use base
-- **Performance** — optimized for large datasets; async chunked rendering, metadata cache pre-filtering, minimal DOM overhead
+- **Create Sample Base** — settings button that generates a "Timeline Sample" folder with 20 vacation-planning tasks and a ready-to-use base
 
 ### Configuration (per view)
 
 Set in the Bases **Configure View** panel:
 - **Start date** — frontmatter property for the bar start
 - **End date** — frontmatter property for the bar end
+- **Visible properties / order** — the first ordered property becomes the primary frozen column; remaining visible properties become sticky property columns
+- **Grouping / sorting** — native Bases grouping and sorting are reflected by the timeline
 
 Set in the **Config panel** (gear icon in the timeline header):
-- **Label** — which property to display on bars
-- **Zoom** — scale factor
 - **Color by** — property to drive color mapping
 - **Color map** — assign colors per unique value
 
 Plugin-wide setting (Settings → Timeline for Bases):
 - **Week starts on** — Monday or Sunday
 
-## Releasing
+## Development
 
-This plugin publishes Obsidian-compatible release assets from a Git tag.
-
-Use this exact flow for a new release:
-
-1. Make sure the working tree is clean:
-   `git status`
-2. Bump the version:
-   `npm version patch`
-   or `npm version minor`
-   or `npm version major`
-3. Push the release commit:
-   `git push origin main`
-4. Push the tag created by `npm version`:
-   `git push origin --tags`
-5. GitHub Actions will build the plugin and create a GitHub Release containing:
-   - `manifest.json`
-   - `main.js`
-   - `styles.css`
-
-Notes:
-
-- The Git tag must match the plugin version in `manifest.json` exactly, using Obsidian's required `x.y.z` format.
-- Do not use a `v` prefix. Use `0.1.2`, not `v0.1.2`.
-- This repository configures `npm version ...` to create plain `X.Y.Z` tags automatically.
-- `npm version ...` updates `package.json`, `package-lock.json`, and creates the tag.
-- The project's `version` script also updates `manifest.json` and `versions.json` automatically.
-- The release workflow lives in `.github/workflows/release.yml`.
+Build, test, release, and agent workflow notes live in [`AGENT.md`](./AGENT.md).

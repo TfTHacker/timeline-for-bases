@@ -171,6 +171,7 @@ export class TimelineView extends BasesView {
 	private _boundMouseMove!: (e: MouseEvent) => void;
 	private _boundMouseUp!: (e: MouseEvent) => void;
 	private _boundKeyDown!: (e: KeyboardEvent) => void;
+	private _activeDrawEndListener: ((e: MouseEvent) => void) | null = null;
 	private _draggedColumnKey: string | null = null;
 	private _suppressHeaderClick = false;
 	private _collapsedGroupsOverride: Record<string, boolean> | null = null;
@@ -209,6 +210,7 @@ export class TimelineView extends BasesView {
 	onunload(): void {
 		document.removeEventListener('mousemove', this._boundMouseMove);
 		document.removeEventListener('mouseup', this._boundMouseUp);
+		if (this._activeDrawEndListener) window.removeEventListener('mouseup', this._activeDrawEndListener, true);
 		this.containerEl.removeEventListener('keydown', this._boundKeyDown);
 		this._dragTooltipEl?.remove();
 		this.containerEl.empty();
@@ -390,6 +392,20 @@ export class TimelineView extends BasesView {
 		if (this._todaySyncRaf) cancelAnimationFrame(this._todaySyncRaf);
 		this._scrollSyncRaf = 0;
 		this._todaySyncRaf = 0;
+	}
+
+	private bindActiveDrawEnd(): void {
+		if (this._activeDrawEndListener) window.removeEventListener('mouseup', this._activeDrawEndListener, true);
+		this._activeDrawEndListener = (e: MouseEvent) => {
+			void this._onDragEnd(e);
+		};
+		window.addEventListener('mouseup', this._activeDrawEndListener, { capture: true, once: true });
+	}
+
+	private clearActiveDrawEndBinding(): void {
+		if (!this._activeDrawEndListener) return;
+		window.removeEventListener('mouseup', this._activeDrawEndListener, true);
+		this._activeDrawEndListener = null;
 	}
 
 	private applyGroupedLayoutInset(config: TimelineConfig, groups: RenderGroup[]): void {
@@ -2387,6 +2403,7 @@ export class TimelineView extends BasesView {
 					ghostEl.style.left  = `${pct * 100}%`;
 					ghostEl.style.width = '0%';
 					this._draw = { entryPath: entry.file.path, startKey, endKey, anchorDate, rangeMin: this._rangeMin!, totalMs, trackEl, ghostEl };
+					this.bindActiveDrawEnd();
 				});
 			}
 			return;
@@ -3103,6 +3120,7 @@ export class TimelineView extends BasesView {
 	}
 
 	private async _onDragEnd(e: MouseEvent): Promise<void> {
+		this.clearActiveDrawEndBinding();
 		// ── Draw mode finish ─────────────────────────────────────────────────
 		if (this._draw) {
 			const d    = this._draw;
