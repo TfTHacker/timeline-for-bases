@@ -2,7 +2,7 @@
 
 A Gantt-style timeline view for [Obsidian Bases](https://obsidian.md/bases).
 
-![Timeline for Bases screenshot](./screenshot.jpg)
+![Timeline for Bases screenshot](./demo.gif)
 
 ---
 
