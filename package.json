@@ -7,6 +7,9 @@
 		"dev": "node esbuild.config.mjs",
 		"dev:watch": "node scripts/watch.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "node scripts/test.mjs",
+		"push:nexus": "node scripts/push-to-nexus.mjs",
+		"build:push:nexus": "npm run build && npm run push:nexus",
 		"version": "node version-bump.mjs && git add manifest.json versions.json"
 	},
 	"keywords": [

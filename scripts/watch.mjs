@@ -25,6 +25,17 @@ function runBuild() {
 	running = true;
 	const child = spawn(process.execPath, ['esbuild.config.mjs'], { cwd: projectRoot, stdio: 'inherit' });
 	child.on('exit', () => {
+		if (child.exitCode === 0) {
+			const sync = spawn(process.execPath, ['scripts/push-to-nexus.mjs'], { cwd: projectRoot, stdio: 'inherit' });
+			sync.on('exit', () => {
+				running = false;
+				if (queued) {
+					queued = false;
+					runBuild();
+				}
+			});
+			return;
+		}
 		running = false;
 		if (queued) {
 			queued = false;

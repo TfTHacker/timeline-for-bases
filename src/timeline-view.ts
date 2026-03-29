@@ -4,6 +4,7 @@ import {
 	BasesEntryGroup,
 	BasesPropertyId,
 	BasesPropertyOption,
+	BasesSortConfig,
 	BasesView,
 	BasesViewConfig,
 	DateValue,
@@ -18,11 +19,26 @@ import {
 	setIcon,
 } from 'obsidian';
 import type TimelinePlugin from './main';
+import {
+	addCalendarDays,
+	diffCalendarDays,
+	formatCalendarDate,
+	localMidnight,
+	parseCalendarDateString as parseStrictCalendarDateString,
+	parseRawFrontmatterDate as parseStrictRawFrontmatterDate,
+} from './timeline-date';
+import {
+	resolveMovedRange,
+	resolveResizeEndRange,
+	resolveResizeStartRange,
+} from './timeline-drag';
+import { findScopedViewName } from './timeline-persistence';
 
 interface TimelineConfig {
 	startDateProp: BasesPropertyId | null;
 	endDateProp: BasesPropertyId | null;
-	labelProp: BasesPropertyId | null;
+	primaryProp: BasesPropertyId | null;
+	orderedProps: BasesPropertyId[];
 	colorProp: BasesPropertyId | null;
 	colorMap: Record<string, string>;
 	zoom: number;
@@ -40,6 +56,14 @@ interface TimelineConfig {
 	propColWidths: Record<string, number>;
 	/** Total width of the frozen left zone (label col + all prop cols). */
 	frozenWidth: number;
+	/** Persisted collapsed state keyed by group property + label. */
+	collapsedGroups: Record<string, boolean>;
+}
+
+interface RenderGroup {
+	label: string;
+	entries: BasesEntry[];
+	hasKey: boolean;
 }
 
 const LABEL_COLUMN_WIDTH_PX = 175;
@@ -96,11 +120,23 @@ interface DragState {
 	origEnd: Date;          // local midnight (inclusive)
 	mouseStartX: number;
 	trackWidth: number;     // px width of track element (for px→% conversion)
+	dayStepPx: number | null;
+	mouseAnchorDate: Date | null;
+	mouseAnchorOffsetDays: number;
+	barStartPx: number;
+	barEndPx: number;
 	rangeMin: Date;         // local midnight (= timeline min)
 	totalMs: number;        // max - min in ms
 	// Updated each mousemove — used directly in mouseup to avoid CSS precision loss
 	pendingStart: Date;
 	pendingEnd: Date;
+}
+
+interface DayLabelSlot {
+	date: Date;
+	left: number;
+	right: number;
+	width: number;
 }
 
 export class TimelineView extends BasesView {
@@ -135,6 +171,17 @@ export class TimelineView extends BasesView {
 	private _boundMouseMove!: (e: MouseEvent) => void;
 	private _boundMouseUp!: (e: MouseEvent) => void;
 	private _boundKeyDown!: (e: KeyboardEvent) => void;
+	private _draggedColumnKey: string | null = null;
+	private _suppressHeaderClick = false;
+	private _collapsedGroupsOverride: Record<string, boolean> | null = null;
+	private _groupDragPreviewEl: HTMLElement | null = null;
+	private _todayVisibilityEls: HTMLElement[] = [];
+	private _scrollSyncRaf = 0;
+	private _todaySyncRaf = 0;
+	private _viewConfigOverrides: Record<string, unknown> = {};
+	private _dayLabelSlots: DayLabelSlot[] = [];
+	private _rowElsByPath = new Map<string, HTMLElement>();
+	private _barElsByPath = new Map<string, HTMLElement>();
 
 	private onResizeDebounce = debounce(() => this.render(), 100, true);
 	private onDataDebounce = debounce(() => this.render(), 300, false);
@@ -210,6 +257,7 @@ export class TimelineView extends BasesView {
 	}
 
 	private render(): void {
+		this.resetRenderCaches();
 		this.headerEl.empty();
 		this.bodyEl.empty();
 		this.controlsEl.empty();
@@ -217,6 +265,7 @@ export class TimelineView extends BasesView {
 		if (!this.data) return;
 
 		const config = this.loadConfig();
+		this.applyGroupedLayoutInset(config, this.getRenderGroups(config));
 		this.containerEl.setAttribute('data-density', 'compact');
 		this.containerEl.style.setProperty('--timeline-label-col-width', `${config.labelColWidth}px`);
 		this.containerEl.style.setProperty('--timeline-frozen-width', `${config.frozenWidth}px`);
@@ -230,17 +279,22 @@ export class TimelineView extends BasesView {
 	private loadConfig(): TimelineConfig {
 		const startDateProp = this.config.getAsPropertyId('startDate');
 		const endDateProp = this.config.getAsPropertyId('endDate');
-		const labelProp = this.config.getAsPropertyId('label');
 		const colorProp = this.config.getAsPropertyId('colorBy');
+		const rawConfig = this.getRawConfig();
+		const { baseFile, viewName } = this.getPersistenceContext(rawConfig);
 		const colorMap = this.getColorMapFromConfig();
 		const zoom = this.getNumericConfig('zoom', 1, 1, 5);
-		const timeScale = this.getStringConfig('timeScale', 'week', ['day', 'week', 'month', 'quarter', 'year']) as 'day' | 'week' | 'month' | 'quarter' | 'year';
+		const persistedTimeScale = this.plugin.getPersistedTimeScale(baseFile, viewName);
+		const timeScaleSource = typeof persistedTimeScale === 'string' && ['day', 'week', 'month', 'quarter', 'year'].includes(persistedTimeScale)
+			? persistedTimeScale
+			: this.getStringConfig('timeScale', 'week', ['day', 'week', 'month', 'quarter', 'year']);
+		const timeScale = timeScaleSource as 'day' | 'week' | 'month' | 'quarter' | 'year';
 		const weekStart = this.plugin.settings.defaultWeekStart;
 		const labelColWidth = this.getNumericConfig('labelColWidth', LABEL_COLUMN_WIDTH_PX, LABEL_COLUMN_MIN_PX, LABEL_COLUMN_MAX_PX);
 
 		// Read the groupBy property name from the raw Bases config
-		const rawConfig = this.config as any;
-		const groupByProp: string | null = rawConfig?.groupBy?.property ?? null;
+		const rawGroupBy = rawConfig.groupBy as { property?: string } | undefined;
+		const groupByProp: string | null = rawGroupBy?.property ?? null;
 
 		// A property is writable only if it references a frontmatter field (note.*)
 		// Formula and file properties are computed/read-only.
@@ -249,30 +303,30 @@ export class TimelineView extends BasesView {
 		const startWritable = isWritable(startDateProp);
 		const endWritable   = isWritable(endDateProp);
 
-		// Extra props: user-ordered visible properties, excluding label and color (shown elsewhere)
-		// Start/end date props are intentionally NOT excluded — users may want them as columns too
-		const excludedProps = new Set(
-			[labelProp, colorProp]
-				.filter(Boolean)
-				.map(p => JSON.stringify(p))
-		);
-		const extraProps = this.config.getOrder().filter(p => !excludedProps.has(JSON.stringify(p)));
+		// The first ordered property becomes the primary frozen column.
+		const orderedProps = this.config.getOrder();
+		const primaryProp = orderedProps[0] ?? null;
+		const extraProps = orderedProps.slice(1);
 
 		// Per-prop column widths (persisted in config)
-		const savedWidths = (this.config.get('propColWidths') ?? {}) as Record<string, number>;
+		const savedWidths = (this.getViewConfigValue('propColWidths') ?? {}) as Record<string, number>;
+		const collapsedGroups = this._collapsedGroupsOverride
+			? { ...this._collapsedGroupsOverride }
+			: this.getPersistedCollapsedGroups(baseFile, viewName);
 		const propColWidths: Record<string, number> = {};
 		let frozenWidth = labelColWidth;
-		for (const prop of extraProps) {
+		extraProps.forEach((prop, index) => {
 			const key = JSON.stringify(prop);
 			const w = typeof savedWidths[key] === 'number' ? savedWidths[key] : PROP_COLUMN_WIDTH_PX;
 			propColWidths[key] = w;
 			frozenWidth += w;
-		}
+		});
 
 		return {
 			startDateProp,
 			endDateProp,
-			labelProp,
+			primaryProp,
+			orderedProps,
 			colorProp,
 			colorMap,
 			zoom,
@@ -285,23 +339,84 @@ export class TimelineView extends BasesView {
 			extraProps,
 			propColWidths,
 			frozenWidth,
+			collapsedGroups,
 		};
 	}
 
+	private getRawConfig(): Record<string, unknown> {
+		return this.config as unknown as Record<string, unknown>;
+	}
+
+	private getSavedViewConfig(): Record<string, unknown> {
+		const baseProto = Object.getPrototypeOf(TimelineView.prototype) as { getViewConfig?: () => unknown };
+		return (baseProto.getViewConfig?.call(this) ?? {}) as Record<string, unknown>;
+	}
+
+	getViewConfig(): Record<string, unknown> {
+		return {
+			...this.getSavedViewConfig(),
+			...this._viewConfigOverrides,
+		};
+	}
+
+	private getViewConfigValue(key: string): unknown {
+		if (key in this._viewConfigOverrides) return this._viewConfigOverrides[key];
+		const saved = this.getSavedViewConfig();
+		if (key in saved) return saved[key];
+		return this.config.get(key);
+	}
+
+	private setViewConfigValue<T>(key: string, value: T): void {
+		this._viewConfigOverrides[key] = value as unknown;
+		this.getRawConfig()[key] = value as unknown;
+		this.config.set(key, value);
+		if (key === 'timeScale' && typeof value === 'string') {
+			const { baseFile, viewName } = this.getPersistenceContext(this.getRawConfig());
+			void this.plugin.setPersistedTimeScale(baseFile, viewName, value);
+		}
+		const hostView = (this as unknown as { leaf?: { view?: { requestSave?: () => Promise<void> | void } } }).leaf?.view;
+		const requestSave = hostView?.requestSave;
+		if (typeof requestSave === 'function') {
+			void Promise.resolve(requestSave.call(hostView));
+		}
+	}
+
+	private resetRenderCaches(): void {
+		this._todayVisibilityEls = [];
+		this._dayLabelSlots = [];
+		this._rowElsByPath.clear();
+		this._barElsByPath.clear();
+		if (this._scrollSyncRaf) cancelAnimationFrame(this._scrollSyncRaf);
+		if (this._todaySyncRaf) cancelAnimationFrame(this._todaySyncRaf);
+		this._scrollSyncRaf = 0;
+		this._todaySyncRaf = 0;
+	}
+
+	private applyGroupedLayoutInset(config: TimelineConfig, groups: RenderGroup[]): void {
+		const hasGroupedTimeline = groups.length > 1 || groups.some(group => group.hasKey);
+		if (!hasGroupedTimeline || config.extraProps.length === 0) return;
+		const lastProp = config.extraProps[config.extraProps.length - 1];
+		const key = JSON.stringify(lastProp);
+		const current = config.propColWidths[key] ?? PROP_COLUMN_WIDTH_PX;
+		const next = current + 24;
+		config.propColWidths[key] = next;
+		config.frozenWidth += next - current;
+	}
+
 	private getColorMapFromConfig(): Record<string, string> {
-		const value = this.config.get('colorMap');
+		const value = this.getViewConfigValue('colorMap');
 		if (!value || typeof value !== 'object') return {};
 		return { ...(value as Record<string, string>) };
 	}
 
 	private getControlsVisible(): boolean {
-		const value = this.config.get('showColors');
+		const value = this.getViewConfigValue('showColors');
 		if (typeof value === 'boolean') return value;
 		return true; // default open
 	}
 
 	private getNumericConfig(key: string, defaultValue: number, min?: number, max?: number): number {
-		const value = this.config.get(key);
+		const value = this.getViewConfigValue(key);
 		if (value == null || typeof value !== 'number') return defaultValue;
 
 		let result = value;
@@ -311,13 +426,16 @@ export class TimelineView extends BasesView {
 	}
 
 	private getStringConfig(key: string, defaultValue: string, allowedValues?: string[]): string {
-		const value = this.config.get(key);
+		const value = this.getViewConfigValue(key);
 		if (value == null || typeof value !== 'string') return defaultValue;
 		if (allowedValues && !allowedValues.includes(value)) return defaultValue;
 		return value;
 	}
 
 	private renderHeader(config: TimelineConfig): void {
+		const groups = this.getRenderGroups(config);
+		const hasGroupedTimeline = groups.length > 1 || groups.some(group => group.hasKey);
+
 		// Left side: view controls
 		const leftEl = this.headerEl.createDiv({ cls: 'bases-timeline-header-left' });
 
@@ -329,7 +447,7 @@ export class TimelineView extends BasesView {
 			const btn = scaleButtons.createEl('button', { cls: 'bases-timeline-scale-btn', text: scale.charAt(0).toUpperCase() + scale.slice(1) });
 			if (config.timeScale === scale) btn.addClass('is-active');
 			btn.addEventListener('click', () => {
-				this.config.set('timeScale', scale);
+				this.setViewConfigValue('timeScale', scale);
 				this.render();
 			});
 		});
@@ -346,6 +464,16 @@ export class TimelineView extends BasesView {
 		const jumpBtn = navEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Jump to date' } });
 		setIcon(jumpBtn, 'calendar');
 		jumpBtn.addEventListener('click', (e) => this._showJumpToDate(jumpBtn, e));
+
+		if (hasGroupedTimeline) {
+			const groupActionsEl = leftEl.createDiv({ cls: 'bases-timeline-group-actions' });
+			const collapseAllBtn = groupActionsEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Collapse all groups', title: 'Collapse all groups' } });
+			setIcon(collapseAllBtn, 'fold-vertical');
+			collapseAllBtn.addEventListener('click', () => this.setAllGroupsCollapsed(config, groups, true));
+			const expandAllBtn = groupActionsEl.createEl('button', { cls: 'bases-timeline-nav-btn is-icon-only', attr: { 'aria-label': 'Expand all groups', title: 'Expand all groups' } });
+			setIcon(expandAllBtn, 'unfold-vertical');
+			expandAllBtn.addEventListener('click', () => this.setAllGroupsCollapsed(config, groups, false));
+		}
 
 		// Right side
 		const rightEl = this.headerEl.createDiv({ cls: 'bases-timeline-header-right' });
@@ -393,7 +521,7 @@ export class TimelineView extends BasesView {
 		toggle.setAttribute('aria-expanded', isVisible ? 'true' : 'false');
 		toggle.addEventListener('click', () => {
 			const next = !this.getControlsVisible();
-			this.config.set('showColors', next);
+			this.setViewConfigValue('showColors', next);
 			this.render();
 		});
 	}
@@ -406,35 +534,6 @@ export class TimelineView extends BasesView {
 		const allProps = [...(this.allProperties ?? [])].sort((a, b) =>
 			this.getPropertyName(a).localeCompare(this.getPropertyName(b))
 		);
-
-		// Label property selector
-		const labelRowEl = this.controlsEl.createDiv({ cls: 'bases-timeline-config-row' });
-		labelRowEl.createSpan({ cls: 'bases-timeline-config-label', text: 'Label:' });
-		const labelSelect = labelRowEl.createEl('select', { cls: 'bases-timeline-config-select' });
-		labelSelect.createEl('option', { value: '', text: '— file name —' });
-		allProps.forEach(prop => {
-			const opt = labelSelect.createEl('option', { value: JSON.stringify(prop), text: this.getPropertyName(prop) });
-			if (config.labelProp && JSON.stringify(config.labelProp) === JSON.stringify(prop)) opt.selected = true;
-		});
-		labelSelect.addEventListener('change', () => {
-			const val = labelSelect.value;
-			this.config.set('label', val ? JSON.parse(val) : null);
-			this.render();
-		});
-
-		// Zoom slider
-		const zoomRowEl = this.controlsEl.createDiv({ cls: 'bases-timeline-config-row' });
-		zoomRowEl.createSpan({ cls: 'bases-timeline-config-label', text: 'Zoom:' });
-		const zoomSlider = zoomRowEl.createEl('input', { type: 'range' });
-		zoomSlider.min = '1'; zoomSlider.max = '5'; zoomSlider.step = '0.5';
-		zoomSlider.value = String(config.zoom);
-		const zoomValue = zoomRowEl.createSpan({ cls: 'bases-timeline-config-value', text: String(config.zoom) + '×' });
-		zoomSlider.addEventListener('input', () => {
-			const z = parseFloat(zoomSlider.value);
-			zoomValue.textContent = z + '×';
-			this.config.set('zoom', z);
-			this.render();
-		});
 
 		// Color by property selector
 		const propRowEl = this.controlsEl.createDiv({ cls: 'bases-timeline-config-row' });
@@ -453,10 +552,10 @@ export class TimelineView extends BasesView {
 		propSelect.addEventListener('change', () => {
 			const val = propSelect.value;
 			if (!val) {
-				this.config.set('colorBy', null);
+				this.setViewConfigValue('colorBy', null);
 			} else {
 				try {
-					this.config.set('colorBy', JSON.parse(val));
+					this.setViewConfigValue('colorBy', JSON.parse(val));
 				} catch { /* ignore */ }
 			}
 			this.render();
@@ -468,7 +567,7 @@ export class TimelineView extends BasesView {
 		const uniqueValues = this.getUniqueColorValues(config.colorProp);
 		const { colorMap, changed } = this.ensureColorMap(config.colorMap, uniqueValues);
 		if (changed) {
-			this.config.set('colorMap', colorMap);
+			this.setViewConfigValue('colorMap', colorMap);
 			config.colorMap = colorMap;
 		}
 
@@ -497,7 +596,7 @@ export class TimelineView extends BasesView {
 				swatch.addEventListener('click', (e) => {
 					e.stopPropagation();
 					colorMap[value] = color;
-					this.config.set('colorMap', colorMap);
+					this.setViewConfigValue('colorMap', colorMap);
 					this.render();
 				});
 			});
@@ -527,8 +626,55 @@ export class TimelineView extends BasesView {
 		return dotIdx >= 0 ? str.slice(dotIdx + 1) : str;
 	}
 
+	private getRenderGroups(config: TimelineConfig): RenderGroup[] {
+		const hostGroups = (this.data as { groupedData?: BasesEntryGroup[] } | undefined)?.groupedData;
+		if (hostGroups && hostGroups.length > 0) {
+			return hostGroups.map(group => ({
+				label: (group.key && !Value.equals(group.key, NullValue.value)) ? group.key.toString() : 'Ungrouped',
+				entries: group.entries,
+				hasKey: group.hasKey(),
+			}));
+		}
+
+		const source = (this.data as { data?: BasesEntry[] } | BasesEntry[] | undefined);
+		const entries = Array.isArray(source)
+			? source
+			: Array.isArray((source as { data?: BasesEntry[] } | undefined)?.data)
+				? (source as { data: BasesEntry[] }).data
+				: [];
+		if (!config.groupByProp) return [{ label: 'Ungrouped', entries, hasKey: false }];
+
+		const propId = String(config.groupByProp).startsWith('note.')
+			? String(config.groupByProp)
+			: `note.${config.groupByProp}`;
+		const groups = new Map<string, BasesEntry[]>();
+		for (const entry of entries) {
+			let label = '';
+			const value = entry.getValue(propId as BasesPropertyId);
+			if (value && value.isTruthy()) label = value.toString();
+			if (!label) {
+				const fm = this.app.metadataCache.getFileCache(entry.file)?.frontmatter;
+				const raw = fm?.[String(config.groupByProp).replace(/^note\./, '')];
+				label = raw == null || raw === '' ? '' : String(raw);
+			}
+			const key = label || 'Ungrouped';
+			const bucket = groups.get(key);
+			if (bucket) bucket.push(entry);
+			else groups.set(key, [entry]);
+		}
+
+		return Array.from(groups.entries())
+			.sort((a, b) => a[0].localeCompare(b[0]))
+			.map(([label, groupedEntries]) => ({
+				label,
+				entries: groupedEntries,
+				hasKey: label !== 'Ungrouped',
+			}));
+	}
+
 	private renderTimeline(config: TimelineConfig): void {
-		const groups = this.data.groupedData || [];
+		const groups = this.getRenderGroups(config);
+		this.containerEl.style.setProperty('--timeline-group-gutter', '0px');
 
 		if (!config.startDateProp || !config.endDateProp) {
 			this.bodyEl.createDiv({ cls: 'bases-timeline-empty', text: 'Select start and end date fields in view options.' });
@@ -536,8 +682,8 @@ export class TimelineView extends BasesView {
 		}
 
 		// --- Step 1: Determine render window ---
-		const rangeStartMs = this.config.get('rangeStartDate');
-		const rangePresetDays = this.config.get('rangePresetDays');
+		const rangeStartMs = this.getViewConfigValue('rangeStartDate');
+		const rangePresetDays = this.getViewConfigValue('rangePresetDays');
 		const hasFixedWindow = typeof rangeStartMs === 'number' && rangeStartMs > 0
 			&& typeof rangePresetDays === 'number' && rangePresetDays > 0;
 
@@ -555,6 +701,7 @@ export class TimelineView extends BasesView {
 			// Render canvas structure synchronously — visible immediately
 			const scrollerEl = this.bodyEl.createDiv({ cls: 'bases-timeline-scroller' });
 			this._scrollerEl = scrollerEl;
+			this.bindScrollOverlaySync(scrollerEl, config.frozenWidth);
 			const canvasEl = scrollerEl.createDiv({ cls: 'bases-timeline-canvas' });
 			const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
 			const zoom = Math.max(config.zoom, 1);
@@ -575,9 +722,11 @@ export class TimelineView extends BasesView {
 				canvasEl.style.width = `calc(${config.frozenWidth}px + ${zoom * this.getScaleZoomFactor(config.timeScale) * 100}%)`;
 			}
 			this.renderTimeAxis(canvasEl, min, max, config, ticks);
+			this.cacheDayLabelGeometry(canvasEl);
 			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.frozenWidth);
 			if (config.timeScale === 'day') {
 				this.renderTodayMarker(canvasEl, min, max, true, config.frozenWidth);
+				this.bindTodayMarkerVisibilitySync(scrollerEl, config.frozenWidth);
 			}
 			this.attachRowClickHandler(canvasEl);
 
@@ -595,12 +744,11 @@ export class TimelineView extends BasesView {
 				for (const group of groups) {
 					if (this._renderSeq !== seq) return;
 
-					const isGrouped = this.data.groupedData.length > 1 || group.hasKey();
+					const isGrouped = groups.length > 1 || group.hasKey;
+					const groupLabel = group.label;
+					const isCollapsed = this.isGroupCollapsed(groupLabel, config);
 					if (isGrouped) {
-						const groupLabel = group.key && !Value.equals(group.key, NullValue.value)
-							? group.key.toString() : 'Ungrouped';
-						const grpEl = canvasEl.createDiv({ cls: 'bases-timeline-group' });
-						grpEl.createEl('span', { cls: 'bases-timeline-group-label', text: groupLabel });
+						this.renderGroupHeading(canvasEl, group, config, isCollapsed);
 					}
 
 					const groupEntries = group.entries;
@@ -626,7 +774,11 @@ export class TimelineView extends BasesView {
 						this.renderRow(canvasEl, entry, config, min, max, rowIndex % 2 === 0, ticks, entryDatesCache);
 						rowIndex++;
 					}
+
+					this.applyCollapsedStateToRenderedGroups(config.collapsedGroups, config.groupByProp);
 				}
+
+				this.applyCollapsedStateToRenderedGroups(config.collapsedGroups, config.groupByProp);
 			})();
 
 		} else {
@@ -684,6 +836,7 @@ export class TimelineView extends BasesView {
 			this._rangeMin = min; this._rangeMax = max;
 			const scrollerEl = this.bodyEl.createDiv({ cls: 'bases-timeline-scroller' });
 			this._scrollerEl = scrollerEl;
+			this.bindScrollOverlaySync(scrollerEl, config.frozenWidth);
 			const canvasEl = scrollerEl.createDiv({ cls: 'bases-timeline-canvas' });
 			const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
 			const zoom = Math.max(config.zoom, 1);
@@ -705,16 +858,56 @@ export class TimelineView extends BasesView {
 				canvasEl.style.width = `calc(${config.frozenWidth}px + ${zoom * scaleZoom * 100}%)`;
 			}
 			this.renderTimeAxis(canvasEl, min, max, config, ticks);
+			this.cacheDayLabelGeometry(canvasEl);
 			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.frozenWidth);
 			if (config.timeScale === 'day') {
 				this.renderTodayMarker(canvasEl, min, max, true, config.frozenWidth);
+				this.bindTodayMarkerVisibilitySync(scrollerEl, config.frozenWidth);
 			}
 			this.attachRowClickHandler(canvasEl);
 
 			for (const group of groups) {
-				this.renderGroup(canvasEl, group, config, min, max, ticks, entryDatesCache);
+				this.renderGroup(canvasEl, group, config, min, max, ticks, entryDatesCache, groups.length);
 			}
+
+			this.applyCollapsedStateToRenderedGroups(config.collapsedGroups, config.groupByProp);
 		}
+	}
+
+	private bindScrollOverlaySync(scrollerEl: HTMLElement, frozenWidth: number): void {
+		const sync = () => {
+			if (this._scrollSyncRaf) cancelAnimationFrame(this._scrollSyncRaf);
+			this._scrollSyncRaf = requestAnimationFrame(() => {
+				this._scrollSyncRaf = 0;
+				this.syncOverlayClip(scrollerEl, frozenWidth);
+			});
+		};
+		scrollerEl.addEventListener('scroll', sync, { passive: true });
+		sync();
+	}
+
+	private syncOverlayClip(scrollerEl: HTMLElement, frozenWidth: number): void {
+		const scrollLeft = `${scrollerEl.scrollLeft}px`;
+		this.containerEl.style.setProperty('--timeline-scroll-left', scrollLeft);
+	}
+
+	private bindTodayMarkerVisibilitySync(scrollerEl: HTMLElement, frozenWidth: number): void {
+		const sync = () => {
+			if (this._todaySyncRaf) cancelAnimationFrame(this._todaySyncRaf);
+			this._todaySyncRaf = requestAnimationFrame(() => {
+				this._todaySyncRaf = 0;
+				const scrollerRect = scrollerEl.getBoundingClientRect();
+				const visibleTimelineLeft = scrollerRect.left + frozenWidth;
+				const visibleTimelineRight = scrollerRect.right;
+				this._todayVisibilityEls.forEach(el => {
+					const rect = el.getBoundingClientRect();
+					const isVisible = rect.right > visibleTimelineLeft && rect.left < visibleTimelineRight;
+					el.style.visibility = isVisible ? 'visible' : 'hidden';
+				});
+			});
+		};
+		scrollerEl.addEventListener('scroll', sync, { passive: true });
+		sync();
 	}
 
 	/** Resolve entry dates using metadata cache (fast path). Falls back to Bases API if cache is incomplete. */
@@ -781,7 +974,7 @@ export class TimelineView extends BasesView {
 		});
 	}
 
-	private renderTodayMarker(containerEl: HTMLElement, min: Date, max: Date, showLabel: boolean, labelColWidth = LABEL_COLUMN_WIDTH_PX): void {
+	private renderTodayMarker(containerEl: HTMLElement, min: Date, max: Date, showLabel: boolean, frozenWidth = LABEL_COLUMN_WIDTH_PX): void {
 		const today = new Date();
 		today.setHours(0, 0, 0, 0);
 
@@ -791,39 +984,60 @@ export class TimelineView extends BasesView {
 		const offset = today.getTime() - min.getTime();
 		const left = total === 0 ? 0 : (offset / total) * 100;
 
-		// Use actual label column width (not constant) to handle resized columns
+		// Anchor the today overlay to the full frozen zone so it never renders under sticky prop columns.
 		const markerTrackEl = containerEl.createDiv({ cls: 'bases-timeline-overlay-track' });
-		markerTrackEl.style.left = `${labelColWidth}px`;
-		markerTrackEl.style.width = `calc(100% - ${labelColWidth}px)`;
+		markerTrackEl.style.left = `${frozenWidth}px`;
+		markerTrackEl.style.width = `calc(100% - ${frozenWidth}px)`;
 
 		if (showLabel) {
 			const labelEl = markerTrackEl.createDiv({ cls: 'bases-timeline-today-label', text: 'Today' });
 			labelEl.style.left = `${left}%`;
 			labelEl.setAttribute('title', today.toLocaleDateString());
+			this._todayVisibilityEls.push(labelEl);
 		}
 
 		const markerEl = markerTrackEl.createDiv({ cls: 'bases-timeline-today-marker' });
 		markerEl.style.left = `${left}%`;
 		markerEl.setAttribute('title', `Today: ${today.toLocaleDateString()}`);
+		this._todayVisibilityEls.push(markerEl);
+	}
+
+	private cacheDayLabelGeometry(containerEl: HTMLElement): void {
+		const labels = Array.from(containerEl.querySelectorAll<HTMLElement>('.bases-timeline-axis-label.is-day-label'));
+		this._dayLabelSlots = labels.map((label) => {
+			const raw = label.getAttribute('data-date');
+			const date = raw ? this.parseRawFrontmatterDate(raw) : null;
+			const left = label.offsetLeft;
+			const width = label.offsetWidth;
+			return date && width > 0 ? {
+				date,
+				left,
+				right: left + width,
+				width,
+			} : null;
+		}).filter((slot): slot is DayLabelSlot => slot !== null);
 	}
 
 	private renderTimeAxis(containerEl: HTMLElement, min: Date, max: Date, config: TimelineConfig, ticks?: Date[]): void {
 		const axisEl = containerEl.createDiv({ cls: 'bases-timeline-axis' });
 		axisEl.setAttribute('data-scale', config.timeScale);
 
-		// Sticky frozen-left header: "Notes" label col + one header per prop col
+		// Sticky frozen-left header: primary property + one header per remaining property col
 		const spacerEl = axisEl.createDiv({ cls: 'bases-timeline-axis-spacer' });
-		const notesHeaderEl = spacerEl.createDiv({ cls: 'bases-timeline-notes-header', text: 'Notes' });
-		this.attachResizeHandle(notesHeaderEl, config);
+		const primaryHeaderEl = spacerEl.createDiv({
+			cls: 'bases-timeline-notes-header',
+		});
+		this.setupColumnHeader(primaryHeaderEl, config.primaryProp, config, true);
+		this.attachResizeHandle(primaryHeaderEl, config);
 		for (const prop of config.extraProps) {
 			const key = JSON.stringify(prop);
 			const w = config.propColWidths[key] ?? PROP_COLUMN_WIDTH_PX;
 			const headerCell = spacerEl.createDiv({
 				cls: 'bases-timeline-prop-col-header',
-				text: this.config.getDisplayName(prop),
 			});
 			headerCell.style.width = `${w}px`;
 			headerCell.style.minWidth = `${w}px`;
+			this.setupColumnHeader(headerCell, prop, config, false);
 			this.attachPropColResizeHandle(headerCell, prop, config);
 		}
 
@@ -1093,6 +1307,7 @@ export class TimelineView extends BasesView {
 		labelsEl.addClass('is-day-scale');
 		const total = max.getTime() - min.getTime();
 		const oneDayMs = 1000 * 60 * 60 * 24;
+		const axisWidthPx = labelsEl.getBoundingClientRect().width || labelsEl.parentElement?.getBoundingClientRect().width || 0;
 
 		for (let i = 0; i < dayTicks.length; i++) {
 			const date = dayTicks[i];
@@ -1105,10 +1320,13 @@ export class TimelineView extends BasesView {
 			const widthRatio = total === 0 ? 1 : (endMs - startMs) / total;
 			if (leftRatio < -0.01 || leftRatio > 1.01) continue;
 
-			const weekday = this.getCompactWeekdayLabel(date, weekStart);
-			const dayEl = labelsEl.createDiv({ cls: 'bases-timeline-axis-label is-day-label', text: `${weekday} ${date.getDate()}` });
+			const slotWidthPx = axisWidthPx > 0 ? widthRatio * axisWidthPx : 0;
+			const dayEl = labelsEl.createDiv({ cls: 'bases-timeline-axis-label is-day-label' });
 			dayEl.style.left = `${leftRatio * 100}%`;
 			dayEl.style.width = `${Math.max(0, widthRatio * 100)}%`;
+			dayEl.setAttribute('title', date.toLocaleDateString());
+			dayEl.setAttribute('data-date', this._fmtDate(date));
+			this.populateAdaptiveDayLabel(dayEl, date, weekStart, slotWidthPx);
 		}
 	}
 
@@ -1118,8 +1336,26 @@ export class TimelineView extends BasesView {
 		return labels[date.getDay()] ?? new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(date).slice(0, 2);
 	}
 
+	private populateAdaptiveDayLabel(dayEl: HTMLElement, date: Date, weekStart: 'monday' | 'sunday', slotWidthPx: number): void {
+		const weekday = this.getCompactWeekdayLabel(date, weekStart);
+		if (slotWidthPx >= 28) {
+			dayEl.addClass('is-stacked');
+			dayEl.createSpan({ cls: 'bases-timeline-day-weekday', text: weekday });
+			dayEl.createSpan({ cls: 'bases-timeline-day-date', text: String(date.getDate()) });
+			return;
+		}
+		if (slotWidthPx >= 18) {
+			dayEl.createSpan({ cls: 'bases-timeline-day-weekday', text: weekday });
+			return;
+		}
+		if (slotWidthPx >= 12) {
+			dayEl.createSpan({ cls: 'bases-timeline-day-weekday', text: weekday.charAt(0) });
+		}
+	}
+
 	private attachResizeHandle(labelEl: HTMLElement, config: TimelineConfig): void {
 		const handle = labelEl.createDiv({ cls: 'bases-timeline-resize-handle' });
+		handle.setAttribute('draggable', 'false');
 		let startX = 0;
 		let startWidth = 0;
 
@@ -1135,7 +1371,7 @@ export class TimelineView extends BasesView {
 			document.body.removeClass('bases-timeline-resizing');
 			const delta = e.clientX - startX;
 			const newWidth = Math.max(LABEL_COLUMN_MIN_PX, Math.min(LABEL_COLUMN_MAX_PX, startWidth + delta));
-			this.config.set('labelColWidth', newWidth);
+			this.setViewConfigValue('labelColWidth', newWidth);
 		};
 
 		handle.addEventListener('mousedown', (e: MouseEvent) => {
@@ -1154,6 +1390,7 @@ export class TimelineView extends BasesView {
 
 	private attachPropColResizeHandle(headerCell: HTMLElement, prop: BasesPropertyId, config: TimelineConfig): void {
 		const handle = headerCell.createDiv({ cls: 'bases-timeline-resize-handle' });
+		handle.setAttribute('draggable', 'false');
 		const key = JSON.stringify(prop);
 		const PROP_MIN = 60;
 		const PROP_MAX = 400;
@@ -1184,9 +1421,9 @@ export class TimelineView extends BasesView {
 			const delta = e.clientX - startX;
 			const newWidth = Math.max(PROP_MIN, Math.min(PROP_MAX, startWidth + delta));
 			// Persist: read current saved widths, update this key, save back
-			const saved = (this.config.get('propColWidths') ?? {}) as Record<string, number>;
+			const saved = { ...((this.getViewConfigValue('propColWidths') ?? {}) as Record<string, number>) };
 			saved[key] = newWidth;
-			this.config.set('propColWidths', saved);
+			this.setViewConfigValue('propColWidths', saved);
 		};
 
 		handle.addEventListener('mousedown', (e: MouseEvent) => {
@@ -1198,6 +1435,145 @@ export class TimelineView extends BasesView {
 			document.addEventListener('mouseup', onMouseUp);
 			document.body.addClass('bases-timeline-resizing');
 		});
+	}
+
+	private setupColumnHeader(headerEl: HTMLElement, prop: BasesPropertyId | null, config: TimelineConfig, isPrimary: boolean): void {
+		headerEl.empty();
+		headerEl.addClass('bases-timeline-column-header');
+		if (isPrimary) headerEl.addClass('is-primary');
+
+		const iconName = this.getHeaderIcon(prop);
+		if (iconName) {
+			const iconEl = headerEl.createSpan({ cls: 'bases-timeline-column-header-icon' });
+			iconEl.setAttribute('draggable', 'false');
+			setIcon(iconEl, iconName);
+		}
+
+		const labelEl = headerEl.createSpan({
+			cls: 'bases-timeline-column-header-label',
+			text: prop ? this.config.getDisplayName(prop) : 'Name',
+		});
+		labelEl.setAttribute('draggable', 'false');
+
+		const sortDirection = this.getSortDirection(prop);
+		if (sortDirection) {
+			headerEl.addClass(sortDirection === 'ASC' ? 'is-sort-asc' : 'is-sort-desc');
+			headerEl.setAttribute('data-sort', sortDirection);
+			const sortEl = headerEl.createSpan({ cls: 'bases-timeline-column-sort-indicator' });
+			sortEl.setAttribute('draggable', 'false');
+			setIcon(sortEl, sortDirection === 'ASC' ? 'chevron-up' : 'chevron-down');
+		} else {
+			headerEl.removeAttribute('data-sort');
+		}
+
+		if (!prop) return;
+
+		const propKey = JSON.stringify(prop);
+		headerEl.setAttribute('draggable', 'true');
+		headerEl.setAttribute('data-prop-key', propKey);
+		headerEl.setAttribute('title', `${this.config.getDisplayName(prop)}. Click to add or cycle sort, drag to reorder.`);
+
+		headerEl.addEventListener('dragstart', (e: DragEvent) => {
+			if ((e.target as HTMLElement | null)?.closest('.bases-timeline-resize-handle')) {
+				e.preventDefault();
+				return;
+			}
+			this._draggedColumnKey = propKey;
+			this._suppressHeaderClick = false;
+			e.dataTransfer?.setData('text/plain', propKey);
+			if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+			headerEl.addClass('is-dragging');
+		});
+
+		headerEl.addEventListener('dragend', () => {
+			this._draggedColumnKey = null;
+			this._suppressHeaderClick = true;
+			headerEl.removeClass('is-dragging');
+			this.containerEl.querySelectorAll('.bases-timeline-column-header.is-drop-target').forEach(el => el.removeClass('is-drop-target'));
+			window.setTimeout(() => { this._suppressHeaderClick = false; }, 0);
+		});
+
+		headerEl.addEventListener('dragover', (e: DragEvent) => {
+			if (!this._draggedColumnKey || this._draggedColumnKey === propKey) return;
+			e.preventDefault();
+			headerEl.addClass('is-drop-target');
+		});
+
+		headerEl.addEventListener('dragleave', () => headerEl.removeClass('is-drop-target'));
+
+		headerEl.addEventListener('drop', (e: DragEvent) => {
+			e.preventDefault();
+			headerEl.removeClass('is-drop-target');
+			const fromKey = this._draggedColumnKey ?? e.dataTransfer?.getData('text/plain');
+			if (!fromKey || fromKey === propKey) return;
+			this.reorderColumns(fromKey, propKey);
+		});
+
+		headerEl.addEventListener('click', (e: MouseEvent) => {
+			if ((e.target as HTMLElement | null)?.closest('.bases-timeline-resize-handle')) return;
+			if (this._suppressHeaderClick) return;
+			this.toggleSort(prop);
+		});
+	}
+
+	private getHeaderIcon(prop: BasesPropertyId | null): string | null {
+		if (!prop) return 'info';
+
+		const propId = String(prop);
+		if (propId.startsWith('file.')) {
+			if (propId === 'file.name' || propId === 'file.basename') return 'info';
+			if (propId === 'file.folder') return 'folder-open';
+			if (propId === 'file.tags') return 'tags';
+			if (propId === 'file.ctime' || propId === 'file.mtime') return 'clock-3';
+			return 'info';
+		}
+
+		const propKey = propId.replace(/^note\./, '');
+		const propType = this._getPropType(propKey);
+		if (propType === 'date' || propType === 'datetime') return 'calendar';
+		if (propType === 'number') return 'binary';
+		if (propType === 'checkbox') return 'check-square';
+		if (propType === 'multitext') return 'list';
+		if (propType === 'tags') return 'tags';
+
+		return 'text';
+	}
+
+	private reorderColumns(fromKey: string, toKey: string): void {
+		const ordered = [...this.config.getOrder()];
+		const fromIndex = ordered.findIndex(prop => JSON.stringify(prop) === fromKey);
+		const toIndex = ordered.findIndex(prop => JSON.stringify(prop) === toKey);
+		if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+
+		const [moved] = ordered.splice(fromIndex, 1);
+		ordered.splice(toIndex, 0, moved);
+			this.setViewConfigValue('order', ordered);
+			this.render();
+		}
+
+	private getSortDirection(prop: BasesPropertyId | null): 'ASC' | 'DESC' | null {
+		if (!prop) return null;
+		const sortEntry = this.config.getSort().find(sort => JSON.stringify(sort.property) === JSON.stringify(prop));
+		return sortEntry?.direction ?? null;
+	}
+
+	private toggleSort(prop: BasesPropertyId): void {
+		const current = this.getSortDirection(prop);
+		const existing = [...this.config.getSort()];
+		const existingIndex = existing.findIndex(sort => JSON.stringify(sort.property) === JSON.stringify(prop));
+		let nextSort: BasesSortConfig[] = [...existing];
+
+		if (!current) {
+			nextSort = [...existing, { property: prop, direction: 'ASC' }];
+		} else if (current === 'ASC') {
+			nextSort = [...existing];
+			nextSort[existingIndex] = { property: prop, direction: 'DESC' };
+		} else {
+			nextSort = existing.filter((_, index) => index !== existingIndex);
+		}
+
+		this.setViewConfigValue('sort', nextSort);
+		this.render();
 	}
 
 	private _updateFrozenWidth(config: TimelineConfig, changedKey: string, changedWidth: number): void {
@@ -1236,6 +1612,9 @@ export class TimelineView extends BasesView {
 			// Single click on label → open note
 			const isLabel = target.closest('.bases-timeline-label');
 			if (isLabel) {
+				const labelEl = isLabel as HTMLElement;
+				const clickMode = labelEl.getAttribute('data-click-mode');
+				if (clickMode === 'edit') return;
 				evt.preventDefault();
 				void this.app.workspace.openLinkText(path, '', evt.ctrlKey || evt.metaKey);
 				return;
@@ -1254,6 +1633,131 @@ export class TimelineView extends BasesView {
 				lastBarClickPath = path;
 				return;
 			}
+		});
+	}
+
+	private startInlinePropCellEdit(
+		propCell: HTMLElement,
+		valueSpan: HTMLElement,
+		editBtn: HTMLButtonElement | null,
+		entry: BasesEntry,
+		propKey: string,
+		propType: string,
+		text: string,
+	): void {
+		editBtn?.hide();
+		const input = document.createElement('input');
+		input.type = propType === 'number' ? 'number' : 'text';
+		input.value = valueSpan.textContent || '';
+		input.className = 'bases-timeline-prop-cell-input';
+		valueSpan.replaceWith(input);
+		input.focus(); input.select();
+		input.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
+		input.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
+
+		let dropdown: HTMLElement | null = null;
+		const removeDropdown = () => { dropdown?.remove(); dropdown = null; };
+
+		if (propType !== 'number') {
+			const allValues = this.plugin.getCachedVaultValuesForProp(propKey);
+			const showDropdown = (filter: string, showAll = false) => {
+				removeDropdown();
+				const lower = filter.toLowerCase();
+				const matches = allValues.filter(v => showAll ? true : v.toLowerCase().includes(lower));
+				if (matches.length === 0) return;
+
+				dropdown = document.body.createDiv({ cls: 'bases-timeline-prop-suggestions' });
+				const rect = input.getBoundingClientRect();
+				dropdown.style.top = `${rect.bottom + 2}px`;
+				dropdown.style.left = `${rect.left}px`;
+				dropdown.style.minWidth = `${Math.max(rect.width, 120)}px`;
+
+				matches.slice(0, 12).forEach(v => {
+					const item = dropdown!.createDiv({ cls: 'bases-timeline-prop-suggestion-item', text: v });
+					if (v === filter) item.addClass('is-selected');
+					item.addEventListener('mousedown', (me: MouseEvent) => {
+						me.preventDefault();
+						input.value = v;
+						removeDropdown();
+						input.blur();
+					});
+				});
+			};
+
+			input.addEventListener('input', () => showDropdown(input.value));
+			input.addEventListener('click', (ce: MouseEvent) => { ce.stopPropagation(); showDropdown(input.value, true); });
+			setTimeout(() => showDropdown(input.value, true), 0);
+		}
+
+		const save = async () => {
+			removeDropdown();
+			const newVal = input.value.trim();
+			input.replaceWith(valueSpan);
+			editBtn?.show();
+			if (newVal !== text) {
+				valueSpan.textContent = newVal;
+				const file = this.app.vault.getFileByPath(entry.file.path);
+				if (file) {
+					await this.app.fileManager.processFrontMatter(file, fm => {
+						if (newVal === '') delete fm[propKey];
+						else if (propType === 'number') fm[propKey] = parseFloat(newVal);
+						else fm[propKey] = newVal;
+					});
+				}
+			}
+		};
+		input.addEventListener('blur', save);
+		input.addEventListener('keydown', (ke: KeyboardEvent) => {
+			if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
+			if (ke.key === 'Escape') { removeDropdown(); input.value = text; input.blur(); }
+			if (ke.key === 'ArrowDown' && dropdown) {
+				ke.preventDefault();
+				(dropdown.firstElementChild as HTMLElement)?.focus();
+			}
+		});
+	}
+
+	private startInlineLabelEdit(
+		labelEl: HTMLElement,
+		labelSpan: HTMLElement,
+		editBtn: HTMLButtonElement | null,
+		entry: BasesEntry,
+		label: string,
+		labelPropKey: string | null,
+		isFileNameProp: boolean,
+	): void {
+		editBtn?.hide();
+		const input = document.createElement('input');
+		input.type = 'text';
+		input.value = labelSpan.textContent || '';
+		input.className = 'bases-timeline-label-input';
+		labelSpan.replaceWith(input);
+		input.focus(); input.select();
+		input.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
+		input.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
+
+		const save = async () => {
+			const newVal = input.value.trim();
+			input.replaceWith(labelSpan);
+			editBtn?.show();
+			if (newVal && newVal !== label) {
+				labelSpan.textContent = newVal;
+				const file = this.app.vault.getFileByPath(entry.file.path);
+				if (file) {
+					if (labelPropKey) {
+						await this.app.fileManager.processFrontMatter(file, fm => { fm[labelPropKey] = newVal; });
+					} else if (isFileNameProp) {
+						const dir = file.parent?.path;
+						const newPath = normalizePath(dir ? `${dir}/${newVal}.md` : `${newVal}.md`);
+						await this.app.fileManager.renameFile(file, newPath);
+					}
+				}
+			}
+		};
+		input.addEventListener('blur', save);
+		input.addEventListener('keydown', (ke: KeyboardEvent) => {
+			if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
+			if (ke.key === 'Escape') { input.value = label; input.blur(); }
 		});
 	}
 
@@ -1476,19 +1980,18 @@ export class TimelineView extends BasesView {
 		return ticks.filter((_, i) => i % step === 0 || i === ticks.length - 1);
 	}
 
-	private renderGroup(containerEl: HTMLElement, group: BasesEntryGroup, config: TimelineConfig, min: Date, max: Date, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null>): void {
-		const isGrouped = this.data.groupedData.length > 1 || group.hasKey();
-		const groupLabel = (group.key && !Value.equals(group.key, NullValue.value))
-			? group.key.toString()
-			: 'Ungrouped';
+	private renderGroup(containerEl: HTMLElement, group: RenderGroup, config: TimelineConfig, min: Date, max: Date, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null>, groupCount: number): void {
+		const isGrouped = groupCount > 1 || group.hasKey;
+		const groupLabel = group.label;
+		const isCollapsed = this.isGroupCollapsed(groupLabel, config);
 
 		if (isGrouped) {
-			const groupHeaderEl = containerEl.createDiv({ cls: 'bases-timeline-group' });
-			groupHeaderEl.createEl('span', { cls: 'bases-timeline-group-label', text: groupLabel });
+			const groupHeaderEl = this.renderGroupHeading(containerEl, group, config, isCollapsed);
 
 			// Make the group header a drop target
 			groupHeaderEl.addEventListener('dragover', (e) => {
 				e.preventDefault();
+				this.containerEl.addClass('is-group-drag-active');
 				groupHeaderEl.addClass('is-drag-over');
 			});
 			groupHeaderEl.addEventListener('dragleave', () => {
@@ -1497,14 +2000,15 @@ export class TimelineView extends BasesView {
 			groupHeaderEl.addEventListener('drop', (e) => {
 				e.preventDefault();
 				groupHeaderEl.removeClass('is-drag-over');
+				this.clearGroupDragState();
 				const raw = e.dataTransfer?.getData('text/plain');
 				if (!raw) return;
 				try {
 					const { path, fromGroup } = JSON.parse(raw) as { path: string; fromGroup: string };
 					void this._dropToGroup(path, fromGroup, groupLabel, config.groupByProp);
 				} catch { /* ignore malformed drag data */ }
-			});
-		}
+				});
+			}
 
 		let rowIndex = 0;
 		group.entries.forEach((entry) => {
@@ -1515,36 +2019,165 @@ export class TimelineView extends BasesView {
 		});
 	}
 
+	private renderGroupHeading(containerEl: HTMLElement, group: RenderGroup, config: TimelineConfig, isCollapsed = false): HTMLElement {
+		const groupLabel = group.label;
+		const groupProperty = config.groupByProp
+			? String(config.groupByProp).replace(/^note\./, '')
+			: 'Group';
+		const groupHeaderEl = containerEl.createDiv({ cls: 'bases-timeline-group' });
+		if (isCollapsed) groupHeaderEl.addClass('is-collapsed');
+		const headingEl = groupHeaderEl.createDiv({ cls: 'bases-group-heading' });
+		const toggleEl = headingEl.createEl('button', {
+			cls: 'bases-timeline-group-toggle',
+			attr: {
+				type: 'button',
+				'aria-label': `${isCollapsed ? 'Expand' : 'Collapse'} ${groupLabel} group`,
+			},
+		});
+		setIcon(toggleEl, isCollapsed ? 'chevron-right' : 'chevron-down');
+		headingEl.createDiv({ cls: 'bases-group-property', text: groupProperty });
+		headingEl.createDiv({ cls: 'bases-group-value', text: groupLabel });
+		groupHeaderEl.setAttribute('title', `${isCollapsed ? 'Expand' : 'Collapse'} group`);
+		toggleEl.addEventListener('click', (e: MouseEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
+			this.toggleGroupCollapsed(groupLabel, config);
+		});
+		groupHeaderEl.addEventListener('click', (e: MouseEvent) => {
+			if ((e.target as HTMLElement | null)?.closest('.bases-timeline-drag-handle')) return;
+			if ((e.target as HTMLElement | null)?.closest('button, input, a')) return;
+			this.toggleGroupCollapsed(groupLabel, config);
+		});
+		return groupHeaderEl;
+	}
+
+	private getGroupCollapseKey(groupLabel: string, config: TimelineConfig): string {
+		const groupProp = config.groupByProp ? String(config.groupByProp).replace(/^note\./, '') : '__group__';
+		return `${groupProp}::${groupLabel}`;
+	}
+
+	private isGroupCollapsed(groupLabel: string, config: TimelineConfig): boolean {
+		return !!config.collapsedGroups[this.getGroupCollapseKey(groupLabel, config)];
+	}
+
+	private setAllGroupsCollapsed(config: TimelineConfig, groups: RenderGroup[], collapsed: boolean): void {
+		const next: Record<string, boolean> = {};
+		for (const group of groups) {
+			if (!(groups.length > 1 || group.hasKey)) continue;
+			const key = this.getGroupCollapseKey(group.label, config);
+			if (collapsed) next[key] = true;
+		}
+		this._collapsedGroupsOverride = next;
+		this.setViewConfigValue('collapsedGroups', next);
+		const { baseFile, viewName } = this.getPersistenceContext(this.getRawConfig());
+		void this.plugin.setCollapsedGroups(baseFile, viewName, next);
+		config.collapsedGroups = next;
+		this.applyCollapsedStateToRenderedGroups(next, config.groupByProp);
+	}
+
+	private toggleGroupCollapsed(groupLabel: string, config: TimelineConfig): void {
+		const next = { ...config.collapsedGroups };
+		const key = this.getGroupCollapseKey(groupLabel, config);
+		if (next[key]) delete next[key];
+		else next[key] = true;
+		this._collapsedGroupsOverride = next;
+		this.setViewConfigValue('collapsedGroups', next);
+		const { baseFile, viewName } = this.getPersistenceContext(this.getRawConfig());
+		void this.plugin.setCollapsedGroups(baseFile, viewName, next);
+		config.collapsedGroups = next;
+		this.applyCollapsedStateToRenderedGroups(next, config.groupByProp);
+	}
+
+	private getPersistenceContext(rawConfig?: Record<string, unknown>): { baseFile: string | null; viewName: string | null } {
+		const workspaceFile = this.plugin.app.workspace.getActiveFile()?.path
+			?? (this.plugin.app.workspace.getMostRecentLeaf()?.view as { file?: { path?: string } } | undefined)?.file?.path
+			?? null;
+		const baseFile = (this as { file?: { path?: string } }).file?.path ?? workspaceFile;
+		const cfg = rawConfig ?? this.getViewConfig();
+		const domViewName = this.containerEl.closest('.bases-view')?.getAttribute('data-view-name') ?? null;
+		const matchingSavedViewName = baseFile
+			? findScopedViewName(this.plugin.settings.viewTimeScales, baseFile)
+				?? findScopedViewName(this.plugin.settings.collapsedGroups, baseFile)
+			: null;
+		const viewName = typeof cfg?.name === 'string' && cfg.name.length > 0
+			? cfg.name
+			: domViewName ?? matchingSavedViewName;
+		return { baseFile, viewName };
+	}
+
+	private getPersistedCollapsedGroups(baseFile: string | null, viewName: string | null): Record<string, boolean> {
+		if (baseFile && viewName) return this.plugin.getCollapsedGroups(baseFile, viewName);
+		if (!baseFile) return {};
+		const fallbackViewName = findScopedViewName(this.plugin.settings.collapsedGroups, baseFile);
+		return fallbackViewName ? this.plugin.getCollapsedGroups(baseFile, fallbackViewName) : {};
+	}
+
+	private clearGroupDragState(): void {
+		this.containerEl.removeClass('is-group-drag-active');
+		this.containerEl.querySelectorAll('.bases-timeline-group.is-drag-over').forEach(el => el.removeClass('is-drag-over'));
+		this.containerEl.querySelectorAll('.bases-timeline-row.is-drop-target').forEach(el => el.removeClass('is-drop-target'));
+		this.containerEl.querySelectorAll('.bases-timeline-row.is-dragging').forEach(el => el.removeClass('is-dragging'));
+		this._groupDragPreviewEl?.remove();
+		this._groupDragPreviewEl = null;
+	}
+
+	private createGroupDragPreview(label: string): HTMLElement {
+		this._groupDragPreviewEl?.remove();
+		const previewEl = document.body.createDiv({ cls: 'bases-timeline-drag-preview' });
+		const iconEl = previewEl.createSpan({ cls: 'bases-timeline-drag-preview-icon' });
+		setIcon(iconEl, 'grip-vertical');
+		previewEl.createSpan({ cls: 'bases-timeline-drag-preview-label', text: label });
+		this._groupDragPreviewEl = previewEl;
+		return previewEl;
+	}
+
+	private applyCollapsedStateToRenderedGroups(collapsedGroups: Record<string, boolean>, groupByProp: string | null): void {
+		const defaultProp = groupByProp ? String(groupByProp).replace(/^note\./, '') : '__group__';
+		const groupHeaders = Array.from(this.bodyEl.querySelectorAll('.bases-timeline-group')) as HTMLElement[];
+		for (const groupHeaderEl of groupHeaders) {
+			const prop = groupHeaderEl.querySelector('.bases-group-property')?.textContent?.trim() || defaultProp;
+			const label = groupHeaderEl.querySelector('.bases-group-value')?.textContent?.trim() || 'Ungrouped';
+			const collapseKey = `${prop}::${label}`;
+			this.setRenderedGroupCollapsed(groupHeaderEl, !!collapsedGroups[collapseKey]);
+		}
+	}
+
+	private setRenderedGroupCollapsed(groupHeaderEl: HTMLElement, isCollapsed: boolean): void {
+		groupHeaderEl.toggleClass('is-collapsed', isCollapsed);
+		groupHeaderEl.setAttribute('title', `${isCollapsed ? 'Expand' : 'Collapse'} group`);
+		const toggleEl = groupHeaderEl.querySelector('.bases-timeline-group-toggle');
+		if (toggleEl instanceof HTMLElement) {
+			setIcon(toggleEl, isCollapsed ? 'chevron-right' : 'chevron-down');
+			toggleEl.setAttribute('aria-label', `${isCollapsed ? 'Expand' : 'Collapse'} group`);
+		}
+
+		let sibling = groupHeaderEl.nextElementSibling as HTMLElement | null;
+		while (sibling && !sibling.hasClass('bases-timeline-group')) {
+			sibling.toggleClass('is-group-collapsed-hidden', isCollapsed);
+			sibling = sibling.nextElementSibling as HTMLElement | null;
+		}
+	}
+
 	private renderRow(containerEl: HTMLElement, entry: BasesEntry, config: TimelineConfig, min: Date, max: Date, isEven: boolean = false, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null>, currentGroupLabel: string | null = null): void {
 		const rowEl = containerEl.createDiv({ cls: 'bases-timeline-row' });
 		if (isEven) rowEl.addClass('is-even');
 		rowEl.setAttribute('data-entry-path', entry.file.path);
+		this._rowElsByPath.set(entry.file.path, rowEl);
 
-		// Drag handle — only shown when grouping is active
 		if (currentGroupLabel !== null) {
-			const handle = rowEl.createDiv({ cls: 'bases-timeline-drag-handle', attr: { draggable: 'true', title: 'Drag to move to another group' } });
-			setIcon(handle, 'grip-vertical');
-			handle.addEventListener('dragstart', (e) => {
-				const payload = JSON.stringify({ path: entry.file.path, fromGroup: currentGroupLabel });
-				e.dataTransfer?.setData('text/plain', payload);
-				e.dataTransfer!.effectAllowed = 'move';
-				rowEl.addClass('is-dragging');
-			});
-			handle.addEventListener('dragend', () => {
-				rowEl.removeClass('is-dragging');
-			});
-
 			// Make the row itself a drop target (any row in another group works)
 			rowEl.addEventListener('dragover', (e) => {
 				const raw = e.dataTransfer?.types.includes('text/plain');
 				if (!raw) return;
 				e.preventDefault();
+				this.containerEl.addClass('is-group-drag-active');
 				rowEl.addClass('is-drop-target');
 			});
 			rowEl.addEventListener('dragleave', () => rowEl.removeClass('is-drop-target'));
 			rowEl.addEventListener('drop', (e) => {
 				e.preventDefault();
 				rowEl.removeClass('is-drop-target');
+				this.clearGroupDragState();
 				const data = e.dataTransfer?.getData('text/plain');
 				if (!data) return;
 				try {
@@ -1555,8 +2188,30 @@ export class TimelineView extends BasesView {
 			});
 		}
 
-		const label = this.getEntryLabel(entry, config.labelProp);
+		const label = this.getEntryLabel(entry, config.primaryProp);
 		const labelEl = rowEl.createDiv({ cls: 'bases-timeline-label' });
+		if (currentGroupLabel !== null) {
+			labelEl.addClass('has-group-drag-handle');
+			const handle = labelEl.createDiv({ cls: 'bases-timeline-drag-handle', attr: { draggable: 'true', title: `Drag to move "${entry.file.basename}" to another group`, 'aria-label': 'Drag to move to another group' } });
+			setIcon(handle, 'grip-vertical');
+			handle.addEventListener('click', (e: MouseEvent) => {
+				e.preventDefault();
+				e.stopPropagation();
+			});
+			handle.addEventListener('dragstart', (e) => {
+				const payload = JSON.stringify({ path: entry.file.path, fromGroup: currentGroupLabel });
+				e.dataTransfer?.setData('text/plain', payload);
+				e.dataTransfer!.effectAllowed = 'move';
+				this.clearGroupDragState();
+				const previewEl = this.createGroupDragPreview(this.getEntryLabel(entry, config.primaryProp));
+				e.dataTransfer?.setDragImage(previewEl, 14, Math.round(previewEl.offsetHeight / 2));
+				this.containerEl.addClass('is-group-drag-active');
+				rowEl.addClass('is-dragging');
+			});
+			handle.addEventListener('dragend', () => {
+				this.clearGroupDragState();
+			});
+		}
 		const labelInnerEl = labelEl.createDiv({ cls: 'bases-timeline-label-inner' });
 		const labelSpan = labelInnerEl.createEl('span', { text: label });
 		labelEl.addEventListener('mouseover', (e: MouseEvent) => {
@@ -1569,12 +2224,13 @@ export class TimelineView extends BasesView {
 
 		// Extra property columns — one sticky cell per prop, rendered after label cell
 		let propLeft = config.labelColWidth;
-		for (const prop of config.extraProps) {
+		config.extraProps.forEach((prop, propIndex) => {
 			const key = JSON.stringify(prop);
 			const w = config.propColWidths[key] ?? PROP_COLUMN_WIDTH_PX;
 			const val = entry.getValue(prop);
 			const text = (val && val.isTruthy()) ? val.toString() : '';
 			const propCell = rowEl.createDiv({ cls: 'bases-timeline-prop-cell' });
+			if (propIndex === config.extraProps.length - 1) propCell.addClass('is-last-frozen');
 			propCell.setAttribute('data-prop-key', key);
 			propCell.style.left = `${propLeft}px`;
 			propCell.style.width = `${w}px`;
@@ -1587,169 +2243,122 @@ export class TimelineView extends BasesView {
 			if (isWritableProp) {
 				const propType = this._getPropType(propKey);
 				const valueSpan = propCell.createEl('span', { text, cls: 'bases-timeline-prop-cell-value' });
+				propCell.addClass('is-editable');
 
 				if (propType === 'checkbox') {
-					// Checkbox: toggle on pencil click, no input
+					// Checkbox: toggle on click
 					const isChecked = text === 'true';
 					if (isChecked) valueSpan.addClass('is-checked');
-					const editBtn = propCell.createEl('button', { cls: 'bases-timeline-prop-edit-btn' });
-					setIcon(editBtn, isChecked ? 'check-square' : 'square');
-					editBtn.setAttribute('aria-label', 'Toggle');
-					editBtn.addEventListener('click', async (e: MouseEvent) => {
-						e.stopPropagation(); e.preventDefault();
+					const toggleCheckbox = async (e?: MouseEvent) => {
+						e?.stopPropagation(); e?.preventDefault();
 						const newVal = !isChecked;
 						const file = this.app.vault.getFileByPath(entry.file.path);
 						if (file) {
 							await this.app.fileManager.processFrontMatter(file, fm => { fm[propKey] = newVal; });
 						}
-					});
+					};
+					propCell.addEventListener('click', toggleCheckbox);
 				} else if (propType === 'date' || propType === 'datetime') {
-					// Date/datetime: pencil opens a floating date picker
-					const editBtn = propCell.createEl('button', { cls: 'bases-timeline-prop-edit-btn' });
-					setIcon(editBtn, 'pencil');
-					editBtn.setAttribute('aria-label', 'Edit date');
-					editBtn.addEventListener('click', (e: MouseEvent) => {
-						e.stopPropagation(); e.preventDefault();
-						this._showPropDatePicker(propCell, entry.file.path, propKey, propType, text, (newVal) => {
-							valueSpan.textContent = newVal;
-						});
+					// Match Bases table behavior: render an inline date input in the cell.
+					valueSpan.remove();
+					const dateCell = propCell.createDiv({
+						cls: 'bases-table-cell bases-metadata-value metadata-property-value bases-timeline-date-cell',
+					});
+					dateCell.setAttribute('data-property-type', 'date');
+
+					const dateInput = dateCell.createEl('input', {
+						type: 'date',
+						cls: 'metadata-input metadata-input-text mod-date',
+						attr: { max: '9999-12-31', placeholder: 'Empty' },
+					});
+					const parsedDate = this.parseDateValue(val) ?? this.parseRawFrontmatterDate(text);
+					dateInput.value = parsedDate ? this._fmtDate(parsedDate) : '';
+					dateInput.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
+					dateInput.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
+
+					const saveDate = async () => {
+						const newVal = dateInput.value.trim();
+						const oldVal = parsedDate ? this._fmtDate(parsedDate) : '';
+						if (newVal === oldVal) return;
+						const file = this.app.vault.getFileByPath(entry.file.path);
+						if (file) {
+							await this.app.fileManager.processFrontMatter(file, fm => {
+								if (newVal === '') delete fm[propKey];
+								else fm[propKey] = newVal;
+							});
+						}
+					};
+
+					dateInput.addEventListener('change', () => { void saveDate(); });
+					dateInput.addEventListener('blur', () => { void saveDate(); });
+					dateInput.addEventListener('keydown', (ke: KeyboardEvent) => {
+						if (ke.key === 'Enter') {
+							ke.preventDefault();
+							dateInput.blur();
+						}
+						if (ke.key === 'Escape') {
+							dateInput.value = parsedDate ? this._fmtDate(parsedDate) : '';
+							dateInput.blur();
+						}
+					});
+					propCell.addEventListener('click', (e: MouseEvent) => {
+						if ((e.target as HTMLElement | null)?.closest('input, button, a')) return;
+						e.preventDefault();
+						e.stopPropagation();
+						dateInput.focus();
+						if (typeof dateInput.showPicker === 'function') {
+							try {
+								dateInput.showPicker();
+							} catch {
+								// Some environments require a trusted user gesture; focus is still enough to edit.
+							}
+						}
 					});
 				} else {
 					// Text / number / multitext / tags / anything else: inline input
-					const editBtn = propCell.createEl('button', { cls: 'bases-timeline-prop-edit-btn' });
-					setIcon(editBtn, 'pencil');
-					editBtn.setAttribute('aria-label', 'Edit');
-
-					editBtn.addEventListener('click', (e: MouseEvent) => {
-						e.stopPropagation(); e.preventDefault();
-						editBtn.hide();
-						const input = document.createElement('input');
-						input.type = propType === 'number' ? 'number' : 'text';
-						input.value = valueSpan.textContent || '';
-						input.className = 'bases-timeline-prop-cell-input';
-						valueSpan.replaceWith(input);
-						input.focus(); input.select();
-						input.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
-						input.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
-
-						// Suggestions dropdown for text fields
-						let dropdown: HTMLElement | null = null;
-						const removeDropdown = () => { dropdown?.remove(); dropdown = null; };
-
-						if (propType !== 'number') {
-							const allValues = this.getVaultValuesForProp(propKey);
-
-							const showDropdown = (filter: string, showAll = false) => {
-								removeDropdown();
-								const lower = filter.toLowerCase();
-								const matches = allValues.filter(v =>
-									showAll
-										? true
-										: v.toLowerCase().includes(lower)
-								);
-								if (matches.length === 0) return;
-
-								dropdown = document.body.createDiv({ cls: 'bases-timeline-prop-suggestions' });
-								const rect = input.getBoundingClientRect();
-								dropdown.style.top = `${rect.bottom + 2}px`;
-								dropdown.style.left = `${rect.left}px`;
-								dropdown.style.minWidth = `${Math.max(rect.width, 120)}px`;
-
-								matches.slice(0, 12).forEach(v => {
-									const item = dropdown!.createDiv({ cls: 'bases-timeline-prop-suggestion-item', text: v });
-									if (v === filter) item.addClass('is-selected');
-									item.addEventListener('mousedown', (me: MouseEvent) => {
-										me.preventDefault();
-										input.value = v;
-										removeDropdown();
-										input.blur();
-									});
-								});
-							};
-
-								input.addEventListener('input', () => showDropdown(input.value));
-							input.addEventListener('click', (ce: MouseEvent) => { ce.stopPropagation(); showDropdown(input.value, true); });
-							// Show immediately after DOM insertion
-							setTimeout(() => showDropdown(input.value, true), 0);
-						}
-
-						const save = async () => {
-							removeDropdown();
-							const newVal = input.value.trim();
-							input.replaceWith(valueSpan);
-							editBtn.show();
-							if (newVal !== text) {
-								valueSpan.textContent = newVal;
-								const file = this.app.vault.getFileByPath(entry.file.path);
-								if (file) {
-									await this.app.fileManager.processFrontMatter(file, fm => {
-										if (newVal === '') {
-											delete fm[propKey];
-										} else if (propType === 'number') {
-											fm[propKey] = parseFloat(newVal);
-										} else {
-											fm[propKey] = newVal;
-										}
-									});
-								}
-							}
-						};
-						input.addEventListener('blur', save);
-						input.addEventListener('keydown', (ke: KeyboardEvent) => {
-							if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
-							if (ke.key === 'Escape') { removeDropdown(); input.value = text; input.blur(); }
-							if (ke.key === 'ArrowDown' && dropdown) {
-								ke.preventDefault();
-								(dropdown.firstElementChild as HTMLElement)?.focus();
-							}
-						});
+					const beginEdit = (e?: MouseEvent) => {
+						e?.stopPropagation(); e?.preventDefault();
+						if (propCell.querySelector('input.bases-timeline-prop-cell-input')) return;
+						this.startInlinePropCellEdit(propCell, valueSpan, null, entry, propKey, propType, text);
+					};
+					propCell.addEventListener('click', (e: MouseEvent) => {
+						if ((e.target as HTMLElement | null)?.closest('button, input, a')) return;
+						beginEdit(e);
 					});
 				}
 			} else {
 				// Read-only cell
 				propCell.createEl('span', { text, cls: 'bases-timeline-prop-cell-value is-readonly' });
 			}
-		}
+		});
 
 
 
 		// Inline edit: pencil icon appears on hover → click to edit
-		const labelPropKey = config.labelProp ? String(config.labelProp).replace(/^note\./, '') : null;
-		if (labelPropKey) {
-			const editBtn = labelEl.createEl('button', { cls: 'bases-timeline-label-edit-btn' });
-			setIcon(editBtn, 'pencil');
-			editBtn.setAttribute('aria-label', 'Edit name');
-
-			editBtn.addEventListener('click', (e: MouseEvent) => {
-				e.stopPropagation(); e.preventDefault();
-				editBtn.hide();
-				const input = document.createElement('input');
-				input.type = 'text';
-				input.value = labelSpan.textContent || '';
-				input.className = 'bases-timeline-label-input';
-				labelSpan.replaceWith(input);
-				input.focus(); input.select();
-				input.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
-				input.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
-
-				const save = async () => {
-					const newVal = input.value.trim();
-					input.replaceWith(labelSpan);
-					editBtn.show();
-					if (newVal && newVal !== label) {
-						labelSpan.textContent = newVal;
-						const file = this.app.vault.getFileByPath(entry.file.path);
-						if (file) {
-							await this.app.fileManager.processFrontMatter(file, fm => { fm[labelPropKey] = newVal; });
-						}
-					}
-				};
-				input.addEventListener('blur', save);
-				input.addEventListener('keydown', (ke: KeyboardEvent) => {
-					if (ke.key === 'Enter') { ke.preventDefault(); input.blur(); }
-					if (ke.key === 'Escape') { input.value = label; input.blur(); }
+		if (config.extraProps.length === 0) labelEl.addClass('is-last-frozen');
+		const primaryPropId = config.primaryProp ? String(config.primaryProp) : null;
+		const labelPropKey = primaryPropId?.startsWith('note.') ? primaryPropId.replace(/^note\./, '') : null;
+		const isFileNameProp = primaryPropId === 'file.name' || primaryPropId === 'file.basename';
+		if (labelPropKey || isFileNameProp) {
+			labelEl.setAttribute('data-click-mode', labelPropKey && !isFileNameProp ? 'edit' : 'open');
+			const editBtn = isFileNameProp ? labelEl.createEl('button', { cls: 'bases-timeline-label-edit-btn' }) : null;
+			if (editBtn) {
+				setIcon(editBtn, 'pencil');
+				editBtn.setAttribute('aria-label', 'Edit name');
+			}
+			const beginLabelEdit = (e?: MouseEvent) => {
+				e?.stopPropagation(); e?.preventDefault();
+				if (labelEl.querySelector('input.bases-timeline-label-input')) return;
+				this.startInlineLabelEdit(labelEl, labelSpan, editBtn, entry, label, labelPropKey, isFileNameProp);
+			};
+			editBtn?.addEventListener('click', beginLabelEdit);
+			if (labelPropKey && !isFileNameProp) {
+				labelEl.addClass('is-editable');
+				labelEl.addEventListener('click', (e: MouseEvent) => {
+					if ((e.target as HTMLElement | null)?.closest('button, input, a, .bases-timeline-drag-handle')) return;
+					beginLabelEdit(e);
 				});
-			});
+			}
 		}
 
 		const trackEl = rowEl.createDiv({ cls: 'bases-timeline-track' });
@@ -1812,6 +2421,7 @@ export class TimelineView extends BasesView {
 		}
 
 		const barEl = trackEl.createDiv({ cls: 'bases-timeline-bar' });
+		this._barElsByPath.set(entry.file.path, barEl);
 		if (width < 0.8) {
 			barEl.addClass('is-compressed');
 		}
@@ -1902,18 +2512,39 @@ export class TimelineView extends BasesView {
 
 	private _scrollToDate(date: Date): void {
 		const scroller = this._scrollerEl;
+		if (!scroller) return;
+
+		const target = new Date(date);
+		target.setHours(0, 0, 0, 0);
+		const frozenWidth = this._lastConfig?.frozenWidth ?? 0;
+		const visibleTimelineWidth = Math.max(0, scroller.clientWidth - frozenWidth);
+
+		// Prefer the rendered marker position when it exists so navigation survives reload/render timing issues.
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+		if (target.getTime() === today.getTime()) {
+			const marker = this.bodyEl.querySelector<HTMLElement>('.bases-timeline-today-marker');
+			if (marker) {
+				const scrollerRect = scroller.getBoundingClientRect();
+				const markerRect = marker.getBoundingClientRect();
+				const markerCenter = scroller.scrollLeft + (markerRect.left - scrollerRect.left) + markerRect.width / 2;
+				const desiredCenter = frozenWidth + visibleTimelineWidth / 2;
+				const nextLeft = markerCenter - desiredCenter;
+				scroller.scrollTo({ left: Math.max(0, nextLeft), behavior: 'smooth' });
+				return;
+			}
+		}
+
 		const min = this._rangeMin;
 		const max = this._rangeMax;
 		const config = this._lastConfig;
-		if (!scroller || !min || !max || !config) return;
-
+		if (!min || !max || !config) return;
 		const total = max.getTime() - min.getTime();
 		if (total === 0) return;
 
-		const target = new Date(date); target.setHours(0, 0, 0, 0);
 		const ratio = (target.getTime() - min.getTime()) / total;
 		const trackWidth = scroller.scrollWidth - config.frozenWidth;
-		const scrollLeft = config.frozenWidth + ratio * trackWidth - scroller.clientWidth / 2;
+		const scrollLeft = ratio * trackWidth - visibleTimelineWidth / 2;
 		scroller.scrollTo({ left: Math.max(0, scrollLeft), behavior: 'smooth' });
 	}
 
@@ -1930,7 +2561,7 @@ export class TimelineView extends BasesView {
 		}
 	}
 
-	/** Show a floating date picker popover anchored to a prop cell for editing date/datetime props. */
+	/** Show a floating date picker popover anchored to a prop cell, normalized to a calendar date. */
 	private _showPropDatePicker(
 		anchor: HTMLElement,
 		filePath: string,
@@ -1948,15 +2579,13 @@ export class TimelineView extends BasesView {
 		popover.style.top = `${rect.bottom + 4}px`;
 		popover.style.left = `${rect.left}px`;
 
-		const input = popover.createEl('input', { type: isDatetime ? 'datetime-local' : 'date' });
-		// Pre-fill with current value (ISO date string or YYYY-MM-DD)
+		const input = popover.createEl('input', { type: 'date' });
+		// Timeline semantics are day-based, so datetime values are reduced to their calendar date.
 		if (currentValue) {
 			try {
-				const d = new Date(currentValue);
-				if (!isNaN(d.getTime())) {
-					input.value = isDatetime
-						? d.toISOString().slice(0, 16)
-						: d.toISOString().slice(0, 10);
+				const d = this.parseRawFrontmatterDate(currentValue);
+				if (d) {
+					input.value = this._fmtDate(d);
 				} else {
 					input.value = currentValue;
 				}
@@ -1975,10 +2604,8 @@ export class TimelineView extends BasesView {
 				popover.remove();
 				return;
 			}
-			const d = new Date(raw + (isDatetime ? '' : 'T00:00:00'));
-			const stored = isDatetime ? d.toISOString() : raw;
 			if (file) {
-				await this.app.fileManager.processFrontMatter(file, fm => { fm[propKey] = stored; });
+				await this.app.fileManager.processFrontMatter(file, fm => { fm[propKey] = raw; });
 				onSave(raw);
 			}
 			popover.remove();
@@ -2014,8 +2641,8 @@ export class TimelineView extends BasesView {
 
 		const go = popover.createEl('button', { cls: 'mod-cta', text: 'Go' });
 		go.addEventListener('click', () => {
-			const d = new Date(input.value + 'T00:00:00');
-			if (!isNaN(d.getTime())) this._scrollToDate(d);
+			const d = this.parseRawFrontmatterDate(input.value);
+			if (d) this._scrollToDate(d);
 			popover.remove();
 		});
 		input.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -2038,47 +2665,11 @@ export class TimelineView extends BasesView {
 		if (!file) return;
 
 		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
-
-		// Determine the group-by property:
-		// 1. Hint from config (usually null since Bases doesn't expose it).
-		// 2. Match the entry's own frontmatter value against its current group label.
-		//    Works when the entry is in a named group (non-empty value).
-		// 3. Fallback for "Ungrouped" entries: scan entries in other named groups
-		//    to identify which field holds the group key value.
-		let groupByProp = hintProp;
-
-		// Helper: strip Bases' `note.` namespace prefix → actual YAML frontmatter key.
-		// Bases stores property IDs as `note.horizon` internally, but the YAML key is `horizon`.
-		const normaliseKey = (k: string) => k.startsWith('note.') ? k.slice(5) : k;
-
-		// Normalise the hint too — it comes directly from Bases config and already has the prefix
-		if (groupByProp) groupByProp = normaliseKey(groupByProp);
-
-		if (!groupByProp && fromGroupValue !== 'Ungrouped') {
-			for (const [k, v] of Object.entries(fm)) {
-				if (k === 'position') continue;
-				if (String(v ?? '') === fromGroupValue) { groupByProp = normaliseKey(k); break; }
-			}
-		}
-
+		const groupByProp = hintProp
+			? String(hintProp).replace(/^note\./, '')
+			: null;
 		if (!groupByProp) {
-			// Scan named groups to find which frontmatter field matches their key
-			outer: for (const grp of this.data.groupedData) {
-				if (!grp.hasKey()) continue;
-				const grpLabel = grp.key?.toString() ?? '';
-				if (!grpLabel) continue;
-				for (const candidate of grp.entries.slice(0, 5)) {
-					const cfm = this.app.metadataCache.getFileCache(candidate.file)?.frontmatter ?? {};
-					for (const [k, v] of Object.entries(cfm)) {
-						if (k === 'position') continue;
-						if (String(v ?? '') === grpLabel) { groupByProp = normaliseKey(k); break outer; }
-					}
-				}
-			}
-		}
-
-		if (!groupByProp) {
-			new Notice('Timeline: could not determine group property — drag-to-group requires at least one other non-empty group');
+			new Notice('Timeline: drag-to-group is only supported when the view exposes a writable group property');
 			return;
 		}
 
@@ -2132,9 +2723,10 @@ export class TimelineView extends BasesView {
 	// ─── Selection ───────────────────────────────────────────────────────────
 
 	private _clearSelection(): void {
+		for (const path of this._selectedPaths) {
+			this._barElsByPath.get(path)?.removeClass('is-selected');
+		}
 		this._selectedPaths.clear();
-		this.bodyEl.querySelectorAll('.bases-timeline-bar.is-selected')
-			.forEach(el => el.removeClass('is-selected'));
 	}
 
 	// ─── Context menu ─────────────────────────────────────────────────────────
@@ -2321,14 +2913,35 @@ export class TimelineView extends BasesView {
 
 	// ─── Drag & resize ───────────────────────────────────────────────────────
 
-	private _localMidnight(d: Date): Date { const r = new Date(d); r.setHours(0, 0, 0, 0); return r; }
+	private _localMidnight(d: Date): Date { return localMidnight(d); }
+	private _addCalendarDays(d: Date, days: number): Date { return addCalendarDays(d, days); }
+	private _fmtDate(d: Date): string { return formatCalendarDate(d); }
 
-	private _fmtDate(d: Date): string {
-		const y = d.getFullYear();
-		const m = String(d.getMonth() + 1).padStart(2, '0');
-		const day = String(d.getDate()).padStart(2, '0');
-		return `${y}-${m}-${day}`;
+	private _getRenderedDayStepPx(trackEl: HTMLElement): number | null {
+		if (this._dayLabelSlots.length === 0) {
+			const canvas = trackEl.closest('.bases-timeline-canvas');
+			if (!(canvas instanceof HTMLElement)) return null;
+			this.cacheDayLabelGeometry(canvas);
+		}
+		if (this._dayLabelSlots.length === 0) return null;
+		const avg = this._dayLabelSlots.reduce((sum, slot) => sum + slot.width, 0) / this._dayLabelSlots.length;
+		return avg > 0 ? avg : null;
 	}
+
+	private _getRenderedDayDateAtClientX(trackEl: HTMLElement, clientX: number): Date | null {
+		const canvas = trackEl.closest('.bases-timeline-canvas');
+		if (!(canvas instanceof HTMLElement)) return null;
+		if (this._dayLabelSlots.length === 0) this.cacheDayLabelGeometry(canvas);
+		const canvasRect = canvas.getBoundingClientRect();
+		const xWithinCanvas = clientX - canvasRect.left;
+		for (const slot of this._dayLabelSlots) {
+			if (xWithinCanvas < slot.left || xWithinCanvas >= slot.right) continue;
+			return slot.date;
+		}
+		return null;
+	}
+
+	private _diffCalendarDays(start: Date, end: Date): number { return diffCalendarDays(start, end); }
 
 	private _startDrag(
 		type: DragState['type'],
@@ -2343,8 +2956,15 @@ export class TimelineView extends BasesView {
 		totalMs: number
 	): void {
 		const trackEl = barEl.parentElement!;
+		const trackRect = trackEl.getBoundingClientRect();
+		const barRect = barEl.getBoundingClientRect();
 		const lmStart = this._localMidnight(origStart);
 		const lmEnd   = this._localMidnight(origEnd);
+		const mouseAnchorDate = this._lastConfig?.timeScale === 'day' ? this._getRenderedDayDateAtClientX(trackEl, mouseX) : null;
+		const spanDays = this._diffCalendarDays(lmStart, lmEnd);
+		const mouseAnchorOffsetDays = mouseAnchorDate
+			? Math.max(0, Math.min(spanDays, this._diffCalendarDays(lmStart, mouseAnchorDate)))
+			: 0;
 		this._dragState = {
 			type, barEl, entryPath, startPropKey, endPropKey,
 			origStart: lmStart,
@@ -2353,6 +2973,11 @@ export class TimelineView extends BasesView {
 			pendingEnd:   new Date(lmEnd),
 			mouseStartX: mouseX,
 			trackWidth: trackEl.offsetWidth || 1,
+			dayStepPx: this._lastConfig?.timeScale === 'day' ? this._getRenderedDayStepPx(trackEl) : null,
+			mouseAnchorDate,
+			mouseAnchorOffsetDays,
+			barStartPx: barRect.left - trackRect.left,
+			barEndPx: barRect.right - trackRect.left,
 			rangeMin, totalMs,
 		};
 		barEl.addClass('is-dragging');
@@ -2379,7 +3004,7 @@ export class TimelineView extends BasesView {
 			const start = curDate < d.anchorDate ? curDate : d.anchorDate;
 			const end   = curDate < d.anchorDate ? d.anchorDate : curDate;
 			const startPct = ((start.getTime() - d.rangeMin.getTime()) / d.totalMs) * 100;
-			const endPct   = ((end.getTime() + 86400000 - d.rangeMin.getTime()) / d.totalMs) * 100;
+			const endPct   = ((this._addCalendarDays(end, 1).getTime() - d.rangeMin.getTime()) / d.totalMs) * 100;
 			d.ghostEl.style.left  = `${startPct}%`;
 			d.ghostEl.style.width = `${Math.max(endPct - startPct, 0.5)}%`;
 			return;
@@ -2388,38 +3013,64 @@ export class TimelineView extends BasesView {
 		const s = this._dragState;
 
 		const deltaPx = e.clientX - s.mouseStartX;
-		const deltaDays = Math.round((deltaPx / s.trackWidth) * (s.totalMs / 86400000));
+		const trackEl = s.barEl.parentElement!;
+		const trackRect = trackEl.getBoundingClientRect();
+		const currentMouseDate = s.mouseAnchorDate ? this._getRenderedDayDateAtClientX(s.barEl.parentElement!, e.clientX) : null;
+		const startEdgeDate = this._lastConfig?.timeScale === 'day'
+			? this._getRenderedDayDateAtClientX(trackEl, trackRect.left + s.barStartPx + deltaPx + 1)
+			: null;
+		const endEdgeDate = this._lastConfig?.timeScale === 'day'
+			? this._getRenderedDayDateAtClientX(trackEl, trackRect.left + s.barEndPx + deltaPx - 1)
+			: null;
+		const deltaDays = s.mouseAnchorDate && currentMouseDate
+			? this._diffCalendarDays(s.mouseAnchorDate, currentMouseDate)
+			: s.dayStepPx
+				? Math.round(deltaPx / s.dayStepPx)
+				: Math.round((deltaPx / s.trackWidth) * (s.totalMs / 86400000));
 		const dayMs = 86400000;
 		const minWidthDays = 1; // bar never narrower than 1 day
 
 		let newStart: Date, newEnd: Date;
 
 		if (s.type === 'move') {
-			newStart = this._localMidnight(new Date(s.origStart.getTime() + deltaDays * dayMs));
-			newEnd   = this._localMidnight(new Date(s.origEnd.getTime()   + deltaDays * dayMs));
+			({ start: newStart, end: newEnd } = resolveMovedRange({
+				origStart: s.origStart,
+				origEnd: s.origEnd,
+				currentMouseDate,
+				startEdgeDate,
+				deltaDays,
+				mouseAnchorDate: s.mouseAnchorDate,
+				mouseAnchorOffsetDays: s.mouseAnchorOffsetDays,
+			}));
 			const leftPct = ((newStart.getTime() - s.rangeMin.getTime()) / s.totalMs) * 100;
 			s.barEl.style.left = `${leftPct}%`;
 			// width unchanged (duration preserved)
 
 		} else if (s.type === 'resize-end') {
-			newStart = new Date(s.origStart);
-			const rawEnd = this._localMidnight(new Date(s.origEnd.getTime() + deltaDays * dayMs));
-			// end >= start + 1 day minimum
-			const minEnd = new Date(s.origStart.getTime() + (minWidthDays - 1) * dayMs);
-			newEnd = rawEnd < minEnd ? minEnd : rawEnd;
-			const excl = new Date(newEnd); excl.setDate(excl.getDate() + 1);
+			({ start: newStart, end: newEnd } = resolveResizeEndRange({
+				origStart: s.origStart,
+				origEnd: s.origEnd,
+				currentMouseDate,
+				edgeDate: endEdgeDate,
+				deltaDays,
+				minWidthDays,
+			}));
+			const excl = this._addCalendarDays(newEnd, 1);
 			const widthMs = Math.max(minWidthDays * dayMs, excl.getTime() - newStart.getTime());
 			s.barEl.style.width = `${(widthMs / s.totalMs) * 100}%`;
 			// left unchanged
 
 		} else { // resize-start
-			const rawStart = this._localMidnight(new Date(s.origStart.getTime() + deltaDays * dayMs));
-			// start <= end - 1 day minimum
-			const maxStart = new Date(s.origEnd.getTime() - (minWidthDays - 1) * dayMs);
-			newStart = rawStart > maxStart ? maxStart : rawStart;
-			newEnd = new Date(s.origEnd);
+			({ start: newStart, end: newEnd } = resolveResizeStartRange({
+				origStart: s.origStart,
+				origEnd: s.origEnd,
+				currentMouseDate,
+				edgeDate: startEdgeDate,
+				deltaDays,
+				minWidthDays,
+			}));
 			const leftPct = ((newStart.getTime() - s.rangeMin.getTime()) / s.totalMs) * 100;
-			const excl = new Date(newEnd); excl.setDate(excl.getDate() + 1);
+			const excl = this._addCalendarDays(newEnd, 1);
 			const widthMs = Math.max(minWidthDays * dayMs, excl.getTime() - newStart.getTime());
 			s.barEl.style.left  = `${leftPct}%`;
 			s.barEl.style.width = `${(widthMs / s.totalMs) * 100}%`;
@@ -2479,7 +3130,7 @@ export class TimelineView extends BasesView {
 		// Use pendingStart/End tracked during drag — do NOT reconstruct from CSS
 		const newStart = s.pendingStart;
 		const newEnd   = s.pendingEnd;
-		const deltaMs  = newStart.getTime() - s.origStart.getTime();
+		const deltaDays = this._diffCalendarDays(s.origStart, newStart);
 
 		// Build list of bars to update: the dragged bar + any other selected bars (move only)
 		const toUpdate: UndoRecord['entries'] = [];
@@ -2499,18 +3150,10 @@ export class TimelineView extends BasesView {
 		}
 
 		// Bulk-move other selected bars (only for 'move' type)
-		if (s.type === 'move' && this._selectedPaths.size > 1 && deltaMs !== 0) {
-			const otherBars = Array.from(
-				this.bodyEl.querySelectorAll<HTMLElement>('.bases-timeline-bar.is-selected')
-			).filter(el => {
-				const row = el.closest('[data-entry-path]') as HTMLElement | null;
-				return row && row.getAttribute('data-entry-path') !== s.entryPath;
-			});
+		if (s.type === 'move' && this._selectedPaths.size > 1 && deltaDays !== 0) {
+			const otherPaths = Array.from(this._selectedPaths).filter(path => path !== s.entryPath);
 
-			for (const barEl of otherBars) {
-				const rowEl = barEl.closest('[data-entry-path]') as HTMLElement | null;
-				const path = rowEl?.getAttribute('data-entry-path');
-				if (!path) continue;
+			for (const path of otherPaths) {
 				const file = this.app.vault.getFileByPath(path);
 				if (!file) continue;
 
@@ -2520,10 +3163,11 @@ export class TimelineView extends BasesView {
 				const oldEndStr   = fmCache[s.endPropKey];
 				if (!oldStartStr || !oldEndStr) continue;
 
-				const oldS = new Date(oldStartStr + 'T00:00:00'); oldS.setHours(0,0,0,0);
-				const oldE = new Date(oldEndStr   + 'T00:00:00'); oldE.setHours(0,0,0,0);
-				const newS = new Date(oldS.getTime() + deltaMs);
-				const newE = new Date(oldE.getTime() + deltaMs);
+				const oldS = this.parseRawFrontmatterDate(oldStartStr);
+				const oldE = this.parseRawFrontmatterDate(oldEndStr);
+				if (!oldS || !oldE) continue;
+				const newS = this._addCalendarDays(oldS, deltaDays);
+				const newE = this._addCalendarDays(oldE, deltaDays);
 
 				const before = { start: this._fmtDate(oldS), end: this._fmtDate(oldE) };
 				const after  = { start: this._fmtDate(newS), end: this._fmtDate(newE) };
@@ -2583,32 +3227,29 @@ export class TimelineView extends BasesView {
 		return { start, end, isPoint: false };
 	}
 
+	private parseCalendarDateString(text: string): Date | null {
+		return parseStrictCalendarDateString(text);
+	}
+
 	/** Parse a raw frontmatter value (string | number | Date) into a Date, or null if invalid. */
 	private parseRawFrontmatterDate(raw: unknown): Date | null {
-		if (raw == null || raw === '' || raw === false) return null;
-		const ms = raw instanceof Date ? raw.getTime()
-			: typeof raw === 'number' ? raw
-			: typeof raw === 'string' ? Date.parse(raw)
-			: NaN;
-		return Number.isNaN(ms) ? null : new Date(ms);
+		return parseStrictRawFrontmatterDate(raw);
 	}
 
 	private parseDateValue(value: Value | null): Date | null {
 		if (!value || !value.isTruthy()) return null;
 
 		if (value instanceof DateValue) {
-			const parsed = Date.parse(value.toString());
-			return Number.isNaN(parsed) ? null : new Date(parsed);
+			return this.parseCalendarDateString(value.toString());
 		}
 
 		const text = value.toString();
-		const parsed = Date.parse(text);
-		if (!Number.isNaN(parsed)) return new Date(parsed);
+		const parsed = this.parseCalendarDateString(text);
+		if (parsed) return parsed;
 
 		const dateValue = DateValue.parseFromString(text);
 		if (dateValue) {
-			const parsedDate = Date.parse(dateValue.toString());
-			return Number.isNaN(parsedDate) ? null : new Date(parsedDate);
+			return this.parseCalendarDateString(dateValue.toString());
 		}
 
 		return null;
@@ -2743,23 +3384,6 @@ export class TimelineView extends BasesView {
 			const value = entry.getValue(colorProp);
 			if (!value || !value.isTruthy()) continue;
 			values.add(value.toString());
-		}
-		return Array.from(values).sort((a, b) => a.localeCompare(b));
-	}
-
-	/** Collect all unique values used for a frontmatter key across the entire vault. */
-	private getVaultValuesForProp(propKey: string): string[] {
-		const values = new Set<string>();
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
-			if (!fm) continue;
-			const v = fm[propKey];
-			if (v == null || v === '') continue;
-			if (Array.isArray(v)) {
-				v.forEach(item => item != null && values.add(String(item)));
-			} else {
-				values.add(String(v));
-			}
 		}
 		return Array.from(values).sort((a, b) => a.localeCompare(b));
 	}

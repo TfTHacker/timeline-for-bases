@@ -1,16 +1,22 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting, normalizePath } from 'obsidian';
 import { TimelineView } from './timeline-view';
+import { getScopedRecord, makeScopedViewKey } from './timeline-persistence';
 
 interface TimelinePluginSettings {
 	defaultWeekStart: 'monday' | 'sunday';
+	collapsedGroups: Record<string, Record<string, boolean>>;
+	viewTimeScales: Record<string, string>;
 }
 
 const DEFAULT_SETTINGS: TimelinePluginSettings = {
 	defaultWeekStart: 'monday',
+	collapsedGroups: {},
+	viewTimeScales: {},
 };
 
 export default class TimelinePlugin extends Plugin {
 	settings: TimelinePluginSettings = DEFAULT_SETTINGS;
+	private propertyValueCache = new Map<string, string[]>();
 
 	async onload() {
 		await this.loadSettings();
@@ -22,6 +28,11 @@ export default class TimelinePlugin extends Plugin {
 		});
 
 		this.addSettingTab(new TimelineSettingTab(this.app, this));
+		const clearValueCache = () => this.propertyValueCache.clear();
+		this.registerEvent(this.app.vault.on('create', clearValueCache));
+		this.registerEvent(this.app.vault.on('modify', clearValueCache));
+		this.registerEvent(this.app.vault.on('delete', clearValueCache));
+		this.registerEvent(this.app.vault.on('rename', clearValueCache));
 	}
 
 	async createSampleBase(): Promise<void> {
@@ -41,7 +52,12 @@ export default class TimelinePlugin extends Plugin {
 		// Parallel groups are intentional: days 0-1 (budget+passports), 6-9 (flights+accommodation research),
 		// 12-13 (book flights+accommodation), 22-24 (pet care+house sitter), 29-30 (pack+confirm)
 		const today = new Date();
-		const fmt = (d: Date) => d.toISOString().slice(0, 10);
+		const fmt = (d: Date) => {
+			const year = d.getFullYear();
+			const month = String(d.getMonth() + 1).padStart(2, '0');
+			const day = String(d.getDate()).padStart(2, '0');
+			return `${year}-${month}-${day}`;
+		};
 		const addDays = (d: Date, n: number) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
 
 		const tasks: { name: string; start: number; duration: number; priority: 'High' | 'Medium' | 'Low' }[] = [
@@ -98,7 +114,6 @@ views:
         direction: ASC
     startDate: note.start
     endDate: note.end
-    label: note.title
     colorBy: note.priority
     colorMap:
       High: "#e03131"
@@ -126,6 +141,51 @@ views:
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+	}
+
+	getCachedVaultValuesForProp(propKey: string): string[] {
+		const cached = this.propertyValueCache.get(propKey);
+		if (cached) return [...cached];
+
+		const values = new Set<string>();
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+			if (!fm) continue;
+			const value = fm[propKey];
+			if (value == null || value === '') continue;
+			if (Array.isArray(value)) {
+				value.forEach(item => item != null && values.add(String(item)));
+			} else {
+				values.add(String(value));
+			}
+		}
+
+		const sorted = Array.from(values).sort((a, b) => a.localeCompare(b));
+		this.propertyValueCache.set(propKey, sorted);
+		return [...sorted];
+	}
+
+	getCollapsedGroups(baseFile: string | null, viewName: string | null): Record<string, boolean> {
+		return getScopedRecord(this.settings.collapsedGroups, baseFile, viewName) ?? {};
+	}
+
+	async setCollapsedGroups(baseFile: string | null, viewName: string | null, collapsed: Record<string, boolean>): Promise<void> {
+		const key = makeScopedViewKey(baseFile, viewName);
+		if (!key) return;
+		if (Object.keys(collapsed).length === 0) delete this.settings.collapsedGroups[key];
+		else this.settings.collapsedGroups[key] = collapsed;
+		await this.saveSettings();
+	}
+
+	getPersistedTimeScale(baseFile: string | null, viewName: string | null): string | null {
+		return getScopedRecord(this.settings.viewTimeScales, baseFile, viewName);
+	}
+
+	async setPersistedTimeScale(baseFile: string | null, viewName: string | null, timeScale: string): Promise<void> {
+		const key = makeScopedViewKey(baseFile, viewName);
+		if (!key) return;
+		this.settings.viewTimeScales[key] = timeScale;
+		await this.saveSettings();
 	}
 
 	onunload() {
