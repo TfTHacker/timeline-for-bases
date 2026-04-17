@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.7
+
+### New Features
+- **Today marker on all time scales** — the red "Today" line and label now appear on Week, Month, Quarter, and Year views, not just Day view (closes #4)
+
 ## 0.1.6
 
 ### New Features

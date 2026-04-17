@@ -740,10 +740,8 @@ export class TimelineView extends BasesView {
 			this.renderTimeAxis(canvasEl, min, max, config, ticks);
 			this.cacheDayLabelGeometry(canvasEl);
 			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.frozenWidth);
-			if (config.timeScale === 'day') {
-				this.renderTodayMarker(canvasEl, min, max, true, config.frozenWidth);
-				this.bindTodayMarkerVisibilitySync(scrollerEl, config.frozenWidth);
-			}
+			this.renderTodayMarker(canvasEl, min, max, true, config.frozenWidth);
+			this.bindTodayMarkerVisibilitySync(scrollerEl, config.frozenWidth);
 			this.attachRowClickHandler(canvasEl);
 
 			// Defer all entry work async — yields to browser between chunks
@@ -876,10 +874,8 @@ export class TimelineView extends BasesView {
 			this.renderTimeAxis(canvasEl, min, max, config, ticks);
 			this.cacheDayLabelGeometry(canvasEl);
 			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.frozenWidth);
-			if (config.timeScale === 'day') {
-				this.renderTodayMarker(canvasEl, min, max, true, config.frozenWidth);
-				this.bindTodayMarkerVisibilitySync(scrollerEl, config.frozenWidth);
-			}
+			this.renderTodayMarker(canvasEl, min, max, true, config.frozenWidth);
+			this.bindTodayMarkerVisibilitySync(scrollerEl, config.frozenWidth);
 			this.attachRowClickHandler(canvasEl);
 
 			for (const group of groups) {

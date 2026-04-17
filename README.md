@@ -44,7 +44,7 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 - **5 time scales** — Day, Week, Month, Quarter, Year; switch instantly
 - **Today button** — scrolls the timeline to center today in view
 - **Jump to date** — date picker popover to scroll directly to any date
-- **Today marker** — highlighted line for the current date (Day view)
+- **Today marker** — highlighted line for the current date (all time scales: Day, Week, Month, Quarter, Year)
 - **Adaptive day headers** — day view shows weekday and date with compact formatting based on available width
 - **Day separator lines** — faint vertical grid lines mark each day column boundary
 - **Week start** — Monday or Sunday, set in plugin settings
