@@ -326,7 +326,13 @@ export class TimelineView extends BasesView {
 		let frozenWidth = labelColWidth;
 		extraProps.forEach((prop, index) => {
 			const key = JSON.stringify(prop);
-			const w = key in savedWidths ? savedWidths[key] : PROP_COLUMN_WIDTH_PX;
+			// encodeMap strips JSON quotes from keys for clean YAML storage,
+			// so savedWidths uses plain keys like "note.priority" while
+			// JSON.stringify produces '"note.priority"'.  Check both forms.
+			const plainKey = String(prop);
+			const w = (key in savedWidths) ? savedWidths[key]
+				: (plainKey in savedWidths) ? savedWidths[plainKey]
+				: PROP_COLUMN_WIDTH_PX;
 			propColWidths[key] = w;
 			frozenWidth += w;
 		});
