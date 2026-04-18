@@ -102,6 +102,35 @@ These are easy to regress and should be preserved unless intentionally redesigne
 - Grouped collapsed views should not leak timeline/grid artifacts between group headers.
 - Deployment should be treated as copy-based unless the current workspace explicitly uses a different strategy.
 
+## Bases View Persistence — Critical Pitfalls
+
+Bases' `requestSave()` destroys and recreates the custom view instance. This has cascading consequences:
+
+- **Custom keys get stripped.** Only keys declared in `getViewOptions()` survive Bases' save pipeline. All other keys (colorMap, propColWidths, timeScale, etc.) are silently removed.
+- **Per-instance state is lost.** `_viewConfigOverrides` and any in-memory render counters are cleared on recreation.
+- **Solution: `persistOnly=true` pattern.** Skip `config.set()` (which triggers auto-save) and `requestSave()`. Instead write custom keys directly to the `.base` file via `vault.modify()` using `_persistCustomKeysDirect`. This avoids the white-flash recreation cascade.
+- **Reading undeclared keys after recreation** requires a fallback chain: `_viewConfigOverrides` → raw YAML from `getViewData()` via regex → `config.getAsPropertyId()`.
+
+### encodeMap/decodeMap key format mismatch
+
+`encodeMap` strips JSON quotes from keys for clean YAML (e.g. `"note.priority"` → `note.priority`), but `loadConfig` looked up widths using `JSON.stringify(prop)` which produces `'"note.priority"'`. The lookup always missed, falling back to defaults — causing snap-back on resize. **Always check both JSON-stringified and plain string forms of keys when looking up decoded map values.**
+
+### Infinite render loops from key mismatch
+
+`decodeMap` must NOT re-quote keys containing dots. When `colorBy` was set to `file.fullname`, values like `Agree on travel dates.md` got re-quoted, breaking the key match in `ensureColorMap` → always returned `changed=true` → `vault.modify()` → Bases `onDataUpdated` → render → infinite loop at ~40 renders/sec. This also caused the colorBy dropdown to close instantly (the entire view was being destroyed and recreated on each render).
+
+### BasesPropertyId as object vs string
+
+The colorBy dropdown stores BasesPropertyId via `JSON.parse(propSelect.value)`. For string properties like `"file.fullname"`, this produces a plain string. But `getPropertyIdFromConfig` must handle both cases — if `_viewConfigOverrides[key]` is an object, `String(override)` produces `"[object Object]"`. Check `typeof === 'string'` first; for objects, use `toString()` and return `null` if it yields `[object Object]`.
+
+### Plugin must be in community-plugins.json
+
+Plugins using `registerBasesView()` will NOT auto-load after a full Obsidian reload unless their plugin ID is listed in `.obsidian/community-plugins.json`. After reload the view shows "Unknown view type: timeline" because Obsidian never loaded the plugin. When deploying manually, always verify the ID is in that file.
+
+### UI list caps
+
+When a control could produce unbounded entries (e.g., color pickers for a property with 100 unique values), cap at a reasonable limit (10) with a warning message. Keep the data model complete (all values in colorMap) — only the rendered pickers are capped.
+
 ## Verification Expectations
 
 For UI changes:
