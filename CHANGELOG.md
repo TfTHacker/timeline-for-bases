@@ -3,12 +3,7 @@
 ## 0.1.8
 
 ### Persistence Overhaul
-- **View-specific settings now persist in the .base file** — color maps, time scale, show/hide colors, column widths, and collapsed groups are all stored directly in the .base view definition alongside native Bases properties. Settings travel with the base file (sync, rename, delete), eliminating orphaned entries and a separate data.json cleanup step.
-- **Direct file writes bypass Bases' save pipeline** — Bases' `requestSave()` cycle destroys and recreates the view, causing a white flash. Custom key changes now write directly to the .base file via `vault.modify()`, persisting without flicker.
-
-### Bug Fixes
-- **Label column resize now persists** — the first column no longer snaps back to its default width after resize (closes #7).
-- **No white flicker on color or column changes** — color palette, column resize, time scale, show/hide colors, and zoom all update smoothly without the view being destroyed and recreated.
+- **View-specific settings now persist in the .base file** — color maps, time scale, show/hide colors, column widths, and collapsed groups are all stored directly in the .base view definition alongside native Bases properties. Settings travel with the base file (sync, rename, delete), eliminating orphaned entries and a separate data.json cleanup step (closes #7).
 
 ## 0.1.7
 
