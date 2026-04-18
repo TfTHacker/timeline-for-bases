@@ -314,6 +314,16 @@
 	font-size: 0.9rem;
 }
 
+.bases-timeline-color-cap-warning {
+	color: var(--text-muted);
+	font-size: 0.82rem;
+	font-style: italic;
+	margin-top: 8px;
+	padding: 6px 10px;
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: 6px;
+}
+
 .bases-timeline-config-row {
 	display: flex;
 	align-items: center;

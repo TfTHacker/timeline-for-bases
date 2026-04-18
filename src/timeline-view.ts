@@ -88,6 +88,8 @@ const PALETTE: string[] = [
 
 const DEFAULT_COLORS = PALETTE;
 
+const MAX_COLOR_VALUES = 10;
+
 interface DrawState {
 	entryPath: string;
 	startKey: string;
@@ -693,7 +695,12 @@ export class TimelineView extends BasesView {
 		if (key in this._viewConfigOverrides) {
 			const override = this._viewConfigOverrides[key];
 			if (override == null) return null;
-			return String(override) as BasesPropertyId;
+			// BasesPropertyId is a string like "file.fullname" or "note.priority"
+			// but may be stored as a parsed object from JSON.parse; coerce to string
+			if (typeof override === 'string') return override as BasesPropertyId;
+			// Object form: BasesPropertyId has a toString() returning canonical form
+			const str = String(override);
+			return (str !== '[object Object]' ? str : null) as BasesPropertyId | null;
 		}
 		// 2) Parse from the host view's YAML data
 		const hostView = this.app.workspace.getLeavesOfType('bases')[0]?.view as
@@ -844,18 +851,20 @@ export class TimelineView extends BasesView {
 
 		if (!config.colorProp) return;
 
-		// Color pickers for each unique value
-		const uniqueValues = this.getUniqueColorValues(config.colorProp);
-		const { colorMap, changed } = this.ensureColorMap(config.colorMap, uniqueValues);
+		// Color pickers for each unique value (capped at MAX_COLOR_VALUES)
+		const allUniqueValues = this.getUniqueColorValues(config.colorProp);
+		const { colorMap, changed } = this.ensureColorMap(config.colorMap, allUniqueValues);
 		if (changed) {
 			this.setViewConfigValue('colorMap', this.encodeMap(colorMap), true);
 			config.colorMap = colorMap;
 		}
 
-		if (uniqueValues.length === 0) {
+		if (allUniqueValues.length === 0) {
 			this.controlsEl.createDiv({ cls: 'bases-timeline-controls-empty', text: 'No values found for the selected property.' });
 			return;
 		}
+
+		const uniqueValues = allUniqueValues.slice(0, MAX_COLOR_VALUES);
 
 		let openPalette: HTMLElement | null = null;
 
@@ -903,6 +912,13 @@ export class TimelineView extends BasesView {
 				}
 			});
 		});
+
+		if (allUniqueValues.length > MAX_COLOR_VALUES) {
+			this.controlsEl.createDiv({
+				cls: 'bases-timeline-color-cap-warning',
+				text: `Showing ${MAX_COLOR_VALUES} of ${allUniqueValues.length} values. Choose a property with fewer unique values for individual colors.`,
+			});
+		}
 	}
 
 	private getPropertyName(prop: BasesPropertyId): string {
