@@ -1,17 +1,12 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting, normalizePath } from 'obsidian';
 import { TimelineView } from './timeline-view';
-import { getScopedRecord, makeScopedViewKey } from './timeline-persistence';
 
 interface TimelinePluginSettings {
 	defaultWeekStart: 'monday' | 'sunday';
-	collapsedGroups: Record<string, Record<string, boolean>>;
-	viewTimeScales: Record<string, string>;
 }
 
 const DEFAULT_SETTINGS: TimelinePluginSettings = {
 	defaultWeekStart: 'monday',
-	collapsedGroups: {},
-	viewTimeScales: {},
 };
 
 export default class TimelinePlugin extends Plugin {
@@ -163,29 +158,6 @@ views:
 		const sorted = Array.from(values).sort((a, b) => a.localeCompare(b));
 		this.propertyValueCache.set(propKey, sorted);
 		return [...sorted];
-	}
-
-	getCollapsedGroups(baseFile: string | null, viewName: string | null): Record<string, boolean> {
-		return getScopedRecord(this.settings.collapsedGroups, baseFile, viewName) ?? {};
-	}
-
-	async setCollapsedGroups(baseFile: string | null, viewName: string | null, collapsed: Record<string, boolean>): Promise<void> {
-		const key = makeScopedViewKey(baseFile, viewName);
-		if (!key) return;
-		if (Object.keys(collapsed).length === 0) delete this.settings.collapsedGroups[key];
-		else this.settings.collapsedGroups[key] = collapsed;
-		await this.saveSettings();
-	}
-
-	getPersistedTimeScale(baseFile: string | null, viewName: string | null): string | null {
-		return getScopedRecord(this.settings.viewTimeScales, baseFile, viewName);
-	}
-
-	async setPersistedTimeScale(baseFile: string | null, viewName: string | null, timeScale: string): Promise<void> {
-		const key = makeScopedViewKey(baseFile, viewName);
-		if (!key) return;
-		this.settings.viewTimeScales[key] = timeScale;
-		await this.saveSettings();
 	}
 
 	onunload() {

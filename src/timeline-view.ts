@@ -32,7 +32,6 @@ import {
 	resolveResizeEndRange,
 	resolveResizeStartRange,
 } from './timeline-drag';
-import { findScopedViewName } from './timeline-persistence';
 
 interface TimelineConfig {
 	startDateProp: BasesPropertyId | null;
@@ -174,7 +173,6 @@ export class TimelineView extends BasesView {
 	private _activeDrawEndListener: ((e: MouseEvent) => void) | null = null;
 	private _draggedColumnKey: string | null = null;
 	private _suppressHeaderClick = false;
-	private _collapsedGroupsOverride: Record<string, boolean> | null = null;
 	private _groupDragPreviewEl: HTMLElement | null = null;
 	private _todayVisibilityEls: HTMLElement[] = [];
 	private _scrollSyncRaf = 0;
@@ -271,7 +269,6 @@ export class TimelineView extends BasesView {
 		this.containerEl.setAttribute('data-density', 'compact');
 		this.containerEl.style.setProperty('--timeline-label-col-width', `${config.labelColWidth}px`);
 		this.containerEl.style.setProperty('--timeline-frozen-width', `${config.frozenWidth}px`);
-		this.containerEl.style.setProperty('--timeline-prop-col-width', `${PROP_COLUMN_WIDTH_PX}px`);
 
 		this.renderHeader(config);
 		this.renderControls(config);
@@ -283,14 +280,9 @@ export class TimelineView extends BasesView {
 		const endDateProp = this.config.getAsPropertyId('endDate');
 		const colorProp = this.config.getAsPropertyId('colorBy');
 		const rawConfig = this.getRawConfig();
-		const { baseFile, viewName } = this.getPersistenceContext(rawConfig);
 		const colorMap = this.getColorMapFromConfig();
 		const zoom = this.getNumericConfig('zoom', 1, 1, 5);
-		const persistedTimeScale = this.plugin.getPersistedTimeScale(baseFile, viewName);
-		const timeScaleSource = typeof persistedTimeScale === 'string' && ['day', 'week', 'month', 'quarter', 'year'].includes(persistedTimeScale)
-			? persistedTimeScale
-			: this.getStringConfig('timeScale', 'week', ['day', 'week', 'month', 'quarter', 'year']);
-		const timeScale = timeScaleSource as 'day' | 'week' | 'month' | 'quarter' | 'year';
+		const timeScale = this.getStringConfig('timeScale', 'week', ['day', 'week', 'month', 'quarter', 'year']) as 'day' | 'week' | 'month' | 'quarter' | 'year';
 		const weekStart = this.plugin.settings.defaultWeekStart;
 		const labelColWidth = this.getNumericConfig('labelColWidth', LABEL_COLUMN_WIDTH_PX, LABEL_COLUMN_MIN_PX, LABEL_COLUMN_MAX_PX);
 
@@ -310,16 +302,26 @@ export class TimelineView extends BasesView {
 		const primaryProp = orderedProps[0] ?? null;
 		const extraProps = orderedProps.slice(1);
 
-		// Per-prop column widths (persisted in config)
-		const savedWidths = (this.getViewConfigValue('propColWidths') ?? {}) as Record<string, number>;
-		const collapsedGroups = this._collapsedGroupsOverride
-			? { ...this._collapsedGroupsOverride }
-			: this.getPersistedCollapsedGroups(baseFile, viewName);
+		// Per-prop column widths (persisted in .base file as encoded string)
+		const rawWidths = this.getViewConfigValue('propColWidths');
+		const savedWidthsRaw = (typeof rawWidths === 'string' ? this.decodeMap(rawWidths) : rawWidths ?? {});
+		const rawCollapsed = this.getViewConfigValue('collapsedGroups');
+		const collapsedGroupsRaw = (typeof rawCollapsed === 'string' ? this.decodeMap(rawCollapsed) : rawCollapsed ?? {});
+		// DecodeMap returns string values; parse numbers/booleans for type-safe access
+		const savedWidths: Record<string, number> = {};
+		for (const [k, v] of Object.entries(savedWidthsRaw)) {
+			const num = Number(v);
+			if (!isNaN(num)) savedWidths[k] = num;
+		}
+		const collapsedGroups: Record<string, boolean> = {};
+		for (const [k, v] of Object.entries(collapsedGroupsRaw)) {
+			collapsedGroups[k] = v === 'true' || v === true;
+		}
 		const propColWidths: Record<string, number> = {};
 		let frozenWidth = labelColWidth;
 		extraProps.forEach((prop, index) => {
 			const key = JSON.stringify(prop);
-			const w = typeof savedWidths[key] === 'number' ? savedWidths[key] : PROP_COLUMN_WIDTH_PX;
+			const w = key in savedWidths ? savedWidths[key] : PROP_COLUMN_WIDTH_PX;
 			propColWidths[key] = w;
 			frozenWidth += w;
 		});
@@ -372,15 +374,161 @@ export class TimelineView extends BasesView {
 		this._viewConfigOverrides[key] = value as unknown;
 		this.getRawConfig()[key] = value as unknown;
 		this.config.set(key, value);
-		if (key === 'timeScale' && typeof value === 'string') {
-			const { baseFile, viewName } = this.getPersistenceContext(this.getRawConfig());
-			void this.plugin.setPersistedTimeScale(baseFile, viewName, value);
-		}
-		const hostView = (this as unknown as { leaf?: { view?: { requestSave?: () => Promise<void> | void } } }).leaf?.view;
+
+		// Find the host Bases view (the parent .base file view) which owns
+		// getViewData/setViewData/requestSave.  TimelineView is a BasesView
+		// sub-view without its own leaf, so we navigate up through the workspace.
+		const hostView = this.app.workspace.getLeavesOfType('bases')[0]?.view as
+			| { getViewData?: () => string; setViewData?: (data: string, clear: boolean) => void; requestSave?: () => Promise<void> | void }
+			| undefined;
 		const requestSave = hostView?.requestSave;
 		if (typeof requestSave === 'function') {
-			void Promise.resolve(requestSave.call(hostView));
+			void Promise.resolve(requestSave.call(hostView)).then(() => {
+				// After Bases has saved its declared keys, inject custom string keys
+				// directly into the YAML so they survive reload.
+				this._persistCustomKeys(hostView);
+			});
 		}
+	}
+
+	/** After Bases saves its declared options, ensure custom string keys
+	 *  are properly YAML-quoted in the .base file.  Handles two cases:
+	 *  1. Keys set in the current session (in _viewConfigOverrides) — inject
+	 *     or update them.
+	 *  2. Keys already in the YAML but unquoted (Bases' serializer doesn't
+	 *     quote our pipe/semicolon values) — re-quote them to prevent
+	 *     parse errors on next load. */
+	private _persistCustomKeys(hostView: { getViewData?: () => string; setViewData?: (data: string, clear: boolean) => void; requestSave?: () => Promise<void> | void } | undefined): void {
+		const getViewData = hostView?.getViewData;
+		const setViewData = hostView?.setViewData;
+		if (typeof getViewData !== 'function' || typeof setViewData !== 'function') return;
+
+		let yaml = getViewData.call(hostView);
+		const indent = '    '; // .base view entries are indented 4 spaces
+		let changed = false;
+
+		// Custom keys that need manual YAML injection because Bases doesn't serialize them.
+		// String keys use semicolon-delimited format and need single-quoting.
+		// Numeric keys can be written as plain YAML scalars.
+		const CUSTOM_STRING_KEYS = ['colorMap', 'propColWidths', 'collapsedGroups'];
+		const CUSTOM_NUMERIC_KEYS = ['labelColWidth'];
+
+		// 1) Inject/update keys from the current session's overrides
+		const overrides: Record<string, unknown> = {};
+		for (const key of [...CUSTOM_STRING_KEYS, ...CUSTOM_NUMERIC_KEYS]) {
+			if (key in this._viewConfigOverrides) overrides[key] = this._viewConfigOverrides[key];
+		}
+
+		for (const [key, value] of Object.entries(overrides)) {
+			const existingPattern = new RegExp(`^${indent}${key}:\\s.*$`, 'm');
+			let line: string;
+			if (typeof value === 'number') {
+				// Plain numeric scalar — no quoting needed in YAML
+				line = `${indent}${key}: ${value}`;
+			} else if (typeof value === 'string') {
+				// Single-quote the value for safe YAML output
+				const quoted = "'" + value.replace(/'/g, "''") + "'";
+				line = `${indent}${key}: ${quoted}`;
+			} else {
+				continue;
+			}
+			if (existingPattern.test(yaml)) {
+				yaml = yaml.replace(existingPattern, line);
+			} else {
+				yaml = yaml.trimEnd() + '\n' + line + '\n';
+			}
+			changed = true;
+		}
+
+		// 2) Re-quote any custom string keys that exist in the YAML but aren't
+		//    properly single-quoted (Bases' serializer writes them unquoted)
+		for (const key of CUSTOM_STRING_KEYS) {
+			// Skip keys we already handled in step 1
+			if (key in overrides) continue;
+			// Match: "    colorMap: <value>" where value does NOT start with '
+			const unquotedPattern = new RegExp(
+				`^${indent}${key}: (?!')(.+)$`, 'm'
+			);
+			const match = unquotedPattern.exec(yaml);
+			if (match) {
+				const value = match[1].trim();
+				const quoted = "'" + value.replace(/'/g, "''") + "'";
+				const line = `${indent}${key}: ${quoted}`;
+				yaml = yaml.replace(unquotedPattern, line);
+				changed = true;
+			}
+		}
+
+		if (changed) {
+			setViewData.call(hostView, yaml, true);
+			const requestSave = hostView?.requestSave;
+			if (typeof requestSave === 'function') {
+				void Promise.resolve(requestSave.call(hostView));
+			}
+		}
+	}
+
+	// ── String-encoding for object maps persisted in .base files ──────────
+	// Bases cannot round-trip object-type config values — it mangles them on
+	// save/reload.  We encode maps as semicolon-delimited strings with equals
+	// as the key/value separator, because colons (`:`) and pipes (`|`) are
+	// YAML-special and break the .base file parser when unquoted.
+	//
+	// Format:  "key1=value1;key2=value2;..."
+	// Example: "High=#e03131;Medium=#f59f00;Low=#2f9e44"
+
+	/** Encode a Record<string, string> as a semicolon-delimited string for persistence.
+	 *  Uses `=` as key/value separator and `;` as pair separator — both are
+	 *  YAML-safe unquoted characters, unlike `:` and `|`.  Also strips outer
+	 *  double-quotes from keys (e.g. `"note.start"` → `note.start`) because
+	 *  YAML interprets `"` as the start of a double-quoted string. */
+	private encodeMap(map: Record<string, string>): string {
+		return Object.entries(map).map(([k, v]) => {
+			// Strip outer double-quotes from keys (from JSON.stringify of BasesPropertyId)
+			const safeKey = k.startsWith('"') && k.endsWith('"') ? k.slice(1, -1) : k;
+			return `${safeKey}=${v}`;
+		}).join(';');
+	}
+
+	/** Decode a semicolon-delimited string back into a Record<string, string>.
+	 *  Handles both the current `=`/`;` format and the legacy `:`/`|` format
+	 *  for backward compatibility with existing .base files.  Also adds back
+	 *  outer double-quotes to keys that look like BasesPropertyIds (contain a
+	 *  dot) to match the JSON.stringify format used in-memory. */
+	private decodeMap(encoded: string): Record<string, string> {
+		const result: Record<string, string> = {};
+		if (!encoded) return result;
+		// Detect legacy format: if the string contains `|` but not `;`, it's old-style
+		const useLegacy = encoded.includes('|') && !encoded.includes(';');
+		const pairSep = useLegacy ? '|' : ';';
+		const kvSep = useLegacy ? ':' : '=';
+		for (const pair of encoded.split(pairSep)) {
+			const idx = pair.indexOf(kvSep);
+			if (idx > 0) {
+				let key = pair.slice(0, idx);
+				const val = pair.slice(idx + 1);
+				// Re-add JSON.stringify-style quotes for dotted keys (BasesPropertyId)
+				if (key.includes('.') && !key.startsWith('"')) {
+					key = '"' + key + '"';
+				}
+				result[key] = val;
+			}
+		}
+		return result;
+	}
+
+	private getColorMapFromConfig(): Record<string, string> {
+		const raw = this.getViewConfigValue('colorMap');
+		if (typeof raw === 'string') return this.decodeMap(raw);
+		// Legacy: in-memory object from current session before reload
+		if (raw && typeof raw === 'object') return { ...(raw as Record<string, string>) };
+		return {};
+	}
+
+	private getControlsVisible(): boolean {
+		const value = this.getViewConfigValue('showColors');
+		if (typeof value === 'boolean') return value;
+		return true; // default open
 	}
 
 	private resetRenderCaches(): void {
@@ -419,23 +567,14 @@ export class TimelineView extends BasesView {
 		config.frozenWidth += next - current;
 	}
 
-	private getColorMapFromConfig(): Record<string, string> {
-		const value = this.getViewConfigValue('colorMap');
-		if (!value || typeof value !== 'object') return {};
-		return { ...(value as Record<string, string>) };
-	}
-
-	private getControlsVisible(): boolean {
-		const value = this.getViewConfigValue('showColors');
-		if (typeof value === 'boolean') return value;
-		return true; // default open
-	}
-
 	private getNumericConfig(key: string, defaultValue: number, min?: number, max?: number): number {
 		const value = this.getViewConfigValue(key);
-		if (value == null || typeof value !== 'number') return defaultValue;
+		if (value == null) return defaultValue;
+		// Coerce strings to numbers (Bases YAML parser may return numeric values as strings)
+		const numValue = typeof value === 'number' ? value : Number(value);
+		if (isNaN(numValue)) return defaultValue;
 
-		let result = value;
+		let result = numValue;
 		if (min !== undefined) result = Math.max(min, result);
 		if (max !== undefined) result = Math.min(max, result);
 		return result;
@@ -583,7 +722,7 @@ export class TimelineView extends BasesView {
 		const uniqueValues = this.getUniqueColorValues(config.colorProp);
 		const { colorMap, changed } = this.ensureColorMap(config.colorMap, uniqueValues);
 		if (changed) {
-			this.setViewConfigValue('colorMap', colorMap);
+			this.setViewConfigValue('colorMap', this.encodeMap(colorMap));
 			config.colorMap = colorMap;
 		}
 
@@ -612,7 +751,7 @@ export class TimelineView extends BasesView {
 				swatch.addEventListener('click', (e) => {
 					e.stopPropagation();
 					colorMap[value] = color;
-					this.setViewConfigValue('colorMap', colorMap);
+					this.setViewConfigValue('colorMap', this.encodeMap(colorMap));
 					this.render();
 				});
 			});
@@ -1435,9 +1574,10 @@ export class TimelineView extends BasesView {
 			const delta = e.clientX - startX;
 			const newWidth = Math.max(PROP_MIN, Math.min(PROP_MAX, startWidth + delta));
 			// Persist: read current saved widths, update this key, save back
-			const saved = { ...((this.getViewConfigValue('propColWidths') ?? {}) as Record<string, number>) };
-			saved[key] = newWidth;
-			this.setViewConfigValue('propColWidths', saved);
+			const raw = this.getViewConfigValue('propColWidths');
+			const saved = (typeof raw === 'string' ? this.decodeMap(raw) : raw ?? {}) as Record<string, string>;
+			saved[key] = String(newWidth);
+			this.setViewConfigValue('propColWidths', this.encodeMap(saved));
 		};
 
 		handle.addEventListener('mousedown', (e: MouseEvent) => {
@@ -2081,10 +2221,7 @@ export class TimelineView extends BasesView {
 			const key = this.getGroupCollapseKey(group.label, config);
 			if (collapsed) next[key] = true;
 		}
-		this._collapsedGroupsOverride = next;
-		this.setViewConfigValue('collapsedGroups', next);
-		const { baseFile, viewName } = this.getPersistenceContext(this.getRawConfig());
-		void this.plugin.setCollapsedGroups(baseFile, viewName, next);
+		this.setViewConfigValue('collapsedGroups', this.encodeMap(next as unknown as Record<string, string>));
 		config.collapsedGroups = next;
 		this.applyCollapsedStateToRenderedGroups(next, config.groupByProp);
 	}
@@ -2094,36 +2231,9 @@ export class TimelineView extends BasesView {
 		const key = this.getGroupCollapseKey(groupLabel, config);
 		if (next[key]) delete next[key];
 		else next[key] = true;
-		this._collapsedGroupsOverride = next;
-		this.setViewConfigValue('collapsedGroups', next);
-		const { baseFile, viewName } = this.getPersistenceContext(this.getRawConfig());
-		void this.plugin.setCollapsedGroups(baseFile, viewName, next);
+		this.setViewConfigValue('collapsedGroups', this.encodeMap(next as unknown as Record<string, string>));
 		config.collapsedGroups = next;
 		this.applyCollapsedStateToRenderedGroups(next, config.groupByProp);
-	}
-
-	private getPersistenceContext(rawConfig?: Record<string, unknown>): { baseFile: string | null; viewName: string | null } {
-		const workspaceFile = this.plugin.app.workspace.getActiveFile()?.path
-			?? (this.plugin.app.workspace.getMostRecentLeaf()?.view as { file?: { path?: string } } | undefined)?.file?.path
-			?? null;
-		const baseFile = (this as { file?: { path?: string } }).file?.path ?? workspaceFile;
-		const cfg = rawConfig ?? this.getViewConfig();
-		const domViewName = this.containerEl.closest('.bases-view')?.getAttribute('data-view-name') ?? null;
-		const matchingSavedViewName = baseFile
-			? findScopedViewName(this.plugin.settings.viewTimeScales, baseFile)
-				?? findScopedViewName(this.plugin.settings.collapsedGroups, baseFile)
-			: null;
-		const viewName = typeof cfg?.name === 'string' && cfg.name.length > 0
-			? cfg.name
-			: domViewName ?? matchingSavedViewName;
-		return { baseFile, viewName };
-	}
-
-	private getPersistedCollapsedGroups(baseFile: string | null, viewName: string | null): Record<string, boolean> {
-		if (baseFile && viewName) return this.plugin.getCollapsedGroups(baseFile, viewName);
-		if (!baseFile) return {};
-		const fallbackViewName = findScopedViewName(this.plugin.settings.collapsedGroups, baseFile);
-		return fallbackViewName ? this.plugin.getCollapsedGroups(baseFile, fallbackViewName) : {};
 	}
 
 	private clearGroupDragState(): void {
