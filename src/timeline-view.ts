@@ -370,24 +370,98 @@ export class TimelineView extends BasesView {
 		return this.config.get(key);
 	}
 
-	private setViewConfigValue<T>(key: string, value: T): void {
+	private setViewConfigValue<T>(key: string, value: T, persistOnly = false): void {
 		this._viewConfigOverrides[key] = value as unknown;
 		this.getRawConfig()[key] = value as unknown;
 		this.config.set(key, value);
 
-		// Find the host Bases view (the parent .base file view) which owns
-		// getViewData/setViewData/requestSave.  TimelineView is a BasesView
-		// sub-view without its own leaf, so we navigate up through the workspace.
 		const hostView = this.app.workspace.getLeavesOfType('bases')[0]?.view as
 			| { getViewData?: () => string; setViewData?: (data: string, clear: boolean) => void; requestSave?: () => Promise<void> | void }
 			| undefined;
-		const requestSave = hostView?.requestSave;
-		if (typeof requestSave === 'function') {
-			void Promise.resolve(requestSave.call(hostView)).then(() => {
-				// After Bases has saved its declared keys, inject custom string keys
-				// directly into the YAML so they survive reload.
-				this._persistCustomKeys(hostView);
-			});
+
+		if (persistOnly) {
+			// For persist-only saves, skip requestSave() / setViewData() entirely
+			// — they trigger a full view recreation (white flash).  Instead write
+			// the custom keys directly to the .base file via vault.modify().
+			// The caller is responsible for any needed re-render.
+			void this._persistCustomKeysDirect(hostView);
+		} else {
+			const requestSave = hostView?.requestSave;
+			if (typeof requestSave === 'function') {
+				void Promise.resolve(requestSave.call(hostView)).then(() => {
+					this._persistCustomKeys(hostView);
+				});
+			}
+		}
+	}
+
+	/** Write custom keys directly to the .base file without triggering a
+	 *  Bases save cycle (which would recreate the view, causing a white flash).
+	 *  Reads the current file content, injects/updates custom keys in YAML,
+	 *  and writes back via vault.modify(). */
+	private async _persistCustomKeysDirect(hostView: { getViewData?: () => string } | undefined): Promise<void> {
+		// Get the .base file path from the leaf
+		const leaf = this.app.workspace.getLeavesOfType('bases')[0];
+		const file = (leaf?.view as { file?: { path?: string } } | undefined)?.file;
+		if (!file?.path) return;
+
+		const getViewData = hostView?.getViewData;
+		if (typeof getViewData !== 'function') return;
+
+		let yaml = getViewData.call(hostView);
+		const indent = '    ';
+		let changed = false;
+
+		const CUSTOM_STRING_KEYS = ['colorMap', 'propColWidths', 'collapsedGroups'];
+		const CUSTOM_NUMERIC_KEYS = ['labelColWidth'];
+		const CUSTOM_STRING_SCALAR_KEYS = ['timeScale', 'showColors'];
+		const ALL_CUSTOM_KEYS = [...CUSTOM_STRING_KEYS, ...CUSTOM_NUMERIC_KEYS, ...CUSTOM_STRING_SCALAR_KEYS];
+
+		// Inject/update keys from the current session's overrides
+		for (const key of ALL_CUSTOM_KEYS) {
+			if (!(key in this._viewConfigOverrides)) continue;
+			const value = this._viewConfigOverrides[key];
+			const existingPattern = new RegExp(`^${indent}${key}:\\s.*$`, 'm');
+			let line: string;
+			if (typeof value === 'number') {
+				line = `${indent}${key}: ${value}`;
+			} else if (typeof value === 'boolean') {
+				line = `${indent}${key}: ${value}`;
+			} else if (typeof value === 'string') {
+				const quoted = "'" + value.replace(/'/g, "''") + "'";
+				line = `${indent}${key}: ${quoted}`;
+			} else {
+				continue;
+			}
+			if (existingPattern.test(yaml)) {
+				yaml = yaml.replace(existingPattern, line);
+			} else {
+				yaml = yaml.trimEnd() + '\n' + line + '\n';
+			}
+			changed = true;
+		}
+
+		// Re-quote any unquoted custom string keys already in the YAML
+		for (const key of CUSTOM_STRING_KEYS) {
+			if (key in this._viewConfigOverrides) continue;
+			const unquotedPattern = new RegExp(`^${indent}${key}: (?!')(.+)$`, 'm');
+			const match = unquotedPattern.exec(yaml);
+			if (match) {
+				const value = match[1].trim();
+				const quoted = "'" + value.replace(/'/g, "''") + "'";
+				const line = `${indent}${key}: ${quoted}`;
+				yaml = yaml.replace(unquotedPattern, line);
+				changed = true;
+			}
+		}
+
+		if (changed) {
+			// Write directly to the vault file — bypass Bases' save pipeline
+			// to avoid triggering a view recreation
+			const abstractFile = this.app.vault.getAbstractFileByPath(file.path);
+			if (abstractFile) {
+				await this.app.vault.modify(abstractFile as any, yaml);
+			}
 		}
 	}
 
@@ -412,10 +486,12 @@ export class TimelineView extends BasesView {
 		// Numeric keys can be written as plain YAML scalars.
 		const CUSTOM_STRING_KEYS = ['colorMap', 'propColWidths', 'collapsedGroups'];
 		const CUSTOM_NUMERIC_KEYS = ['labelColWidth'];
+		const CUSTOM_STRING_SCALAR_KEYS = ['timeScale', 'showColors'];
+		const ALL_CUSTOM_KEYS = [...CUSTOM_STRING_KEYS, ...CUSTOM_NUMERIC_KEYS, ...CUSTOM_STRING_SCALAR_KEYS];
 
 		// 1) Inject/update keys from the current session's overrides
 		const overrides: Record<string, unknown> = {};
-		for (const key of [...CUSTOM_STRING_KEYS, ...CUSTOM_NUMERIC_KEYS]) {
+		for (const key of ALL_CUSTOM_KEYS) {
 			if (key in this._viewConfigOverrides) overrides[key] = this._viewConfigOverrides[key];
 		}
 
@@ -424,6 +500,8 @@ export class TimelineView extends BasesView {
 			let line: string;
 			if (typeof value === 'number') {
 				// Plain numeric scalar — no quoting needed in YAML
+				line = `${indent}${key}: ${value}`;
+			} else if (typeof value === 'boolean') {
 				line = `${indent}${key}: ${value}`;
 			} else if (typeof value === 'string') {
 				// Single-quote the value for safe YAML output
@@ -528,6 +606,8 @@ export class TimelineView extends BasesView {
 	private getControlsVisible(): boolean {
 		const value = this.getViewConfigValue('showColors');
 		if (typeof value === 'boolean') return value;
+		if (value === 'false' || value === false) return false;
+		if (value === 'true' || value === true) return true;
 		return true; // default open
 	}
 
@@ -582,9 +662,10 @@ export class TimelineView extends BasesView {
 
 	private getStringConfig(key: string, defaultValue: string, allowedValues?: string[]): string {
 		const value = this.getViewConfigValue(key);
-		if (value == null || typeof value !== 'string') return defaultValue;
-		if (allowedValues && !allowedValues.includes(value)) return defaultValue;
-		return value;
+		if (value == null) return defaultValue;
+		const strValue = typeof value === 'string' ? value : String(value);
+		if (allowedValues && !allowedValues.includes(strValue)) return defaultValue;
+		return strValue;
 	}
 
 	private renderHeader(config: TimelineConfig): void {
@@ -602,7 +683,7 @@ export class TimelineView extends BasesView {
 			const btn = scaleButtons.createEl('button', { cls: 'bases-timeline-scale-btn', text: scale.charAt(0).toUpperCase() + scale.slice(1) });
 			if (config.timeScale === scale) btn.addClass('is-active');
 			btn.addEventListener('click', () => {
-				this.setViewConfigValue('timeScale', scale);
+				this.setViewConfigValue('timeScale', scale, true);
 				this.render();
 			});
 		});
@@ -676,7 +757,7 @@ export class TimelineView extends BasesView {
 		toggle.setAttribute('aria-expanded', isVisible ? 'true' : 'false');
 		toggle.addEventListener('click', () => {
 			const next = !this.getControlsVisible();
-			this.setViewConfigValue('showColors', next);
+			this.setViewConfigValue('showColors', next, true);
 			this.render();
 		});
 	}
@@ -751,8 +832,13 @@ export class TimelineView extends BasesView {
 				swatch.addEventListener('click', (e) => {
 					e.stopPropagation();
 					colorMap[value] = color;
-					this.setViewConfigValue('colorMap', this.encodeMap(colorMap));
-					this.render();
+					this.setViewConfigValue('colorMap', this.encodeMap(colorMap), true);
+					// Update bar colors in-place instead of full re-render
+					this.applyColorToBars(value, color);
+					// Update swatch selection state
+					const row = swatch.closest('.bases-timeline-color-row');
+					if (row) row.querySelectorAll('.bases-timeline-swatch').forEach(s => s.removeClass('is-selected'));
+					swatch.addClass('is-selected');
 				});
 			});
 
@@ -1524,7 +1610,7 @@ export class TimelineView extends BasesView {
 			document.body.removeClass('bases-timeline-resizing');
 			const delta = e.clientX - startX;
 			const newWidth = Math.max(LABEL_COLUMN_MIN_PX, Math.min(LABEL_COLUMN_MAX_PX, startWidth + delta));
-			this.setViewConfigValue('labelColWidth', newWidth);
+			this.setViewConfigValue('labelColWidth', newWidth, true);
 		};
 
 		handle.addEventListener('mousedown', (e: MouseEvent) => {
@@ -1577,7 +1663,7 @@ export class TimelineView extends BasesView {
 			const raw = this.getViewConfigValue('propColWidths');
 			const saved = (typeof raw === 'string' ? this.decodeMap(raw) : raw ?? {}) as Record<string, string>;
 			saved[key] = String(newWidth);
-			this.setViewConfigValue('propColWidths', this.encodeMap(saved));
+			this.setViewConfigValue('propColWidths', this.encodeMap(saved), true);
 		};
 
 		handle.addEventListener('mousedown', (e: MouseEvent) => {
@@ -2221,7 +2307,7 @@ export class TimelineView extends BasesView {
 			const key = this.getGroupCollapseKey(group.label, config);
 			if (collapsed) next[key] = true;
 		}
-		this.setViewConfigValue('collapsedGroups', this.encodeMap(next as unknown as Record<string, string>));
+		this.setViewConfigValue('collapsedGroups', this.encodeMap(next as unknown as Record<string, string>), true);
 		config.collapsedGroups = next;
 		this.applyCollapsedStateToRenderedGroups(next, config.groupByProp);
 	}
@@ -2231,7 +2317,7 @@ export class TimelineView extends BasesView {
 		const key = this.getGroupCollapseKey(groupLabel, config);
 		if (next[key]) delete next[key];
 		else next[key] = true;
-		this.setViewConfigValue('collapsedGroups', this.encodeMap(next as unknown as Record<string, string>));
+		this.setViewConfigValue('collapsedGroups', this.encodeMap(next as unknown as Record<string, string>), true);
 		config.collapsedGroups = next;
 		this.applyCollapsedStateToRenderedGroups(next, config.groupByProp);
 	}
@@ -2556,6 +2642,13 @@ export class TimelineView extends BasesView {
 		const color = this.getEntryColor(entry, config.colorProp, config.colorMap);
 		if (color) {
 			barEl.style.backgroundColor = color;
+		}
+		// Store the color value key for in-place color updates
+		if (config.colorProp) {
+			const colorVal = entry.getValue(config.colorProp);
+			if (colorVal?.isTruthy()) {
+				barEl.setAttribute('data-color-value', colorVal.toString());
+			}
 		}
 
 		barEl.setAttribute('title', `${label} (${dates.start.toLocaleDateString()} → ${dates.end.toLocaleDateString()})`);
@@ -3544,6 +3637,24 @@ export class TimelineView extends BasesView {
 		if (!value || !value.isTruthy()) return null;
 		const key = value.toString();
 		return colorMap[key] || null;
+	}
+
+	/** Update bar background colors in-place for a given color value key.
+	 *  Called after color swap to avoid a full re-render. */
+	private applyColorToBars(colorValue: string, newColor: string): void {
+		this.containerEl.querySelectorAll<HTMLElement>(`.bases-timeline-bar[data-color-value="${CSS.escape(colorValue)}"]`).forEach(bar => {
+			bar.style.backgroundColor = newColor;
+		});
+		// Also update the current-color dot in the controls panel
+		const colorRow = this.controlsEl.querySelector(`.bases-timeline-color-row`);
+		// Find the label matching this value and update its current dot
+		this.controlsEl.querySelectorAll<HTMLElement>('.bases-timeline-color-item').forEach(item => {
+			const label = item.querySelector('.bases-timeline-color-label');
+			if (label?.textContent === colorValue) {
+				const dot = item.querySelector('.bases-timeline-swatch.is-current') as HTMLElement | null;
+				if (dot) dot.style.background = newColor;
+			}
+		});
 	}
 }
 
