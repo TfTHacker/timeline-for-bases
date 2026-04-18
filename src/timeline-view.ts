@@ -278,7 +278,10 @@ export class TimelineView extends BasesView {
 	private loadConfig(): TimelineConfig {
 		const startDateProp = this.config.getAsPropertyId('startDate');
 		const endDateProp = this.config.getAsPropertyId('endDate');
-		const colorProp = this.config.getAsPropertyId('colorBy');
+		// colorBy isn't a declared Bases option, so config.getAsPropertyId() won't find it
+		// after a save/reload cycle. Read it from overrides first (set in the current
+		// session), then from the raw YAML view data, then from Bases config as fallback.
+		const colorProp = this.getPropertyIdFromConfig('colorBy');
 		const rawConfig = this.getRawConfig();
 		const colorMap = this.getColorMapFromConfig();
 		const zoom = this.getNumericConfig('zoom', 1, 1, 5);
@@ -373,19 +376,19 @@ export class TimelineView extends BasesView {
 	private setViewConfigValue<T>(key: string, value: T, persistOnly = false): void {
 		this._viewConfigOverrides[key] = value as unknown;
 		this.getRawConfig()[key] = value as unknown;
-		this.config.set(key, value);
 
 		const hostView = this.app.workspace.getLeavesOfType('bases')[0]?.view as
 			| { getViewData?: () => string; setViewData?: (data: string, clear: boolean) => void; requestSave?: () => Promise<void> | void }
 			| undefined;
 
 		if (persistOnly) {
-			// For persist-only saves, skip requestSave() / setViewData() entirely
-			// — they trigger a full view recreation (white flash).  Instead write
-			// the custom keys directly to the .base file via vault.modify().
+			// For persist-only saves, skip config.set() and requestSave() / setViewData()
+			// entirely — config.set() may trigger Bases' auto-save which recreates the view.
+			// Instead write the custom keys directly to the .base file via vault.modify().
 			// The caller is responsible for any needed re-render.
 			void this._persistCustomKeysDirect(hostView);
 		} else {
+			this.config.set(key, value);
 			const requestSave = hostView?.requestSave;
 			if (typeof requestSave === 'function') {
 				void Promise.resolve(requestSave.call(hostView)).then(() => {
@@ -414,7 +417,7 @@ export class TimelineView extends BasesView {
 
 		const CUSTOM_STRING_KEYS = ['colorMap', 'propColWidths', 'collapsedGroups'];
 		const CUSTOM_NUMERIC_KEYS = ['labelColWidth'];
-		const CUSTOM_STRING_SCALAR_KEYS = ['timeScale', 'showColors'];
+		const CUSTOM_STRING_SCALAR_KEYS = ['timeScale', 'showColors', 'colorBy'];
 		const ALL_CUSTOM_KEYS = [...CUSTOM_STRING_KEYS, ...CUSTOM_NUMERIC_KEYS, ...CUSTOM_STRING_SCALAR_KEYS];
 
 		// Inject/update keys from the current session's overrides
@@ -423,6 +426,14 @@ export class TimelineView extends BasesView {
 			const value = this._viewConfigOverrides[key];
 			const existingPattern = new RegExp(`^${indent}${key}:\\s.*$`, 'm');
 			let line: string;
+			if (value === null || value === undefined) {
+				// Remove the key from the YAML
+				if (existingPattern.test(yaml)) {
+					yaml = yaml.replace(existingPattern, '');
+					changed = true;
+				}
+				continue;
+			}
 			if (typeof value === 'number') {
 				line = `${indent}${key}: ${value}`;
 			} else if (typeof value === 'boolean') {
@@ -486,7 +497,7 @@ export class TimelineView extends BasesView {
 		// Numeric keys can be written as plain YAML scalars.
 		const CUSTOM_STRING_KEYS = ['colorMap', 'propColWidths', 'collapsedGroups'];
 		const CUSTOM_NUMERIC_KEYS = ['labelColWidth'];
-		const CUSTOM_STRING_SCALAR_KEYS = ['timeScale', 'showColors'];
+		const CUSTOM_STRING_SCALAR_KEYS = ['timeScale', 'showColors', 'colorBy'];
 		const ALL_CUSTOM_KEYS = [...CUSTOM_STRING_KEYS, ...CUSTOM_NUMERIC_KEYS, ...CUSTOM_STRING_SCALAR_KEYS];
 
 		// 1) Inject/update keys from the current session's overrides
@@ -498,6 +509,14 @@ export class TimelineView extends BasesView {
 		for (const [key, value] of Object.entries(overrides)) {
 			const existingPattern = new RegExp(`^${indent}${key}:\\s.*$`, 'm');
 			let line: string;
+			if (value === null || value === undefined) {
+				// Remove the key from the YAML
+				if (existingPattern.test(yaml)) {
+					yaml = yaml.replace(existingPattern, '');
+					changed = true;
+				}
+				continue;
+			}
 			if (typeof value === 'number') {
 				// Plain numeric scalar — no quoting needed in YAML
 				line = `${indent}${key}: ${value}`;
@@ -570,9 +589,10 @@ export class TimelineView extends BasesView {
 
 	/** Decode a semicolon-delimited string back into a Record<string, string>.
 	 *  Handles both the current `=`/`;` format and the legacy `:`/`|` format
-	 *  for backward compatibility with existing .base files.  Also adds back
-	 *  outer double-quotes to keys that look like BasesPropertyIds (contain a
-	 *  dot) to match the JSON.stringify format used in-memory. */
+	 *  for backward compatibility with existing .base files.  Keys are stored
+	 *  as plain strings (no JSON-quoting) — they must match `value.toString()`
+	 *  output from Bases, which uses plain strings like "High" or
+	 *  "Agree on travel dates.md", not JSON-stringified BasesPropertyIds. */
 	private decodeMap(encoded: string): Record<string, string> {
 		const result: Record<string, string> = {};
 		if (!encoded) return result;
@@ -583,12 +603,8 @@ export class TimelineView extends BasesView {
 		for (const pair of encoded.split(pairSep)) {
 			const idx = pair.indexOf(kvSep);
 			if (idx > 0) {
-				let key = pair.slice(0, idx);
+				const key = pair.slice(0, idx);
 				const val = pair.slice(idx + 1);
-				// Re-add JSON.stringify-style quotes for dotted keys (BasesPropertyId)
-				if (key.includes('.') && !key.startsWith('"')) {
-					key = '"' + key + '"';
-				}
 				result[key] = val;
 			}
 		}
@@ -666,6 +682,35 @@ export class TimelineView extends BasesView {
 		const strValue = typeof value === 'string' ? value : String(value);
 		if (allowedValues && !allowedValues.includes(strValue)) return defaultValue;
 		return strValue;
+	}
+
+	/** Read a BasesPropertyId from multiple sources: in-memory overrides,
+	 *  the raw YAML view data (parse the key from getViewData()), or
+	 *  Bases' declared config.  Needed for keys like `colorBy` that
+	 *  aren't declared Bases options and get stripped by `requestSave()`. */
+	private getPropertyIdFromConfig(key: string): BasesPropertyId | null {
+		// 1) Override set in the current session — includes explicit null (clear)
+		if (key in this._viewConfigOverrides) {
+			const override = this._viewConfigOverrides[key];
+			if (override == null) return null;
+			return String(override) as BasesPropertyId;
+		}
+		// 2) Parse from the host view's YAML data
+		const hostView = this.app.workspace.getLeavesOfType('bases')[0]?.view as
+			| { getViewData?: () => string }
+			| undefined;
+		const getViewData = hostView?.getViewData;
+		if (typeof getViewData === 'function') {
+			const yaml = getViewData.call(hostView);
+			const pattern = new RegExp(`^    ${key}:\\s(.+)$`, 'm');
+			const match = pattern.exec(yaml);
+			if (match) {
+				const value = match[1].trim().replace(/^['"]|['"]$/g, '');
+				if (value) return value as BasesPropertyId;
+			}
+		}
+		// 3) Bases declared config fallback
+		return this.config.getAsPropertyId(key);
 	}
 
 	private renderHeader(config: TimelineConfig): void {
@@ -788,10 +833,10 @@ export class TimelineView extends BasesView {
 		propSelect.addEventListener('change', () => {
 			const val = propSelect.value;
 			if (!val) {
-				this.setViewConfigValue('colorBy', null);
+				this.setViewConfigValue('colorBy', null, true);
 			} else {
 				try {
-					this.setViewConfigValue('colorBy', JSON.parse(val));
+					this.setViewConfigValue('colorBy', JSON.parse(val), true);
 				} catch { /* ignore */ }
 			}
 			this.render();
@@ -803,7 +848,7 @@ export class TimelineView extends BasesView {
 		const uniqueValues = this.getUniqueColorValues(config.colorProp);
 		const { colorMap, changed } = this.ensureColorMap(config.colorMap, uniqueValues);
 		if (changed) {
-			this.setViewConfigValue('colorMap', this.encodeMap(colorMap));
+			this.setViewConfigValue('colorMap', this.encodeMap(colorMap), true);
 			config.colorMap = colorMap;
 		}
 
