@@ -2,14 +2,13 @@
 
 ## 0.1.8
 
-### Architecture
-- **View-specific settings now persist in the .base file** — color maps, time scale, show/hide colors, column widths, and collapsed groups are all stored directly in the .base view definition alongside native Bases properties. This means view settings travel with the base file (sync, rename, delete), eliminating orphaned entries and the need for a separate data.json cleanup step.
-- **Simplified plugin settings** — data.json now only stores truly global settings (default week start). Removed scoped-key persistence layer (viewTimeScales, viewColorMaps, viewShowColors, viewPropColWidths, collapsedGroups) that was previously used as a workaround for Bases' custom key persistence.
-- **Removed orphan cleanup command** — no longer needed since view-specific data lives in the .base file, not data.json.
+### Persistence Overhaul
+- **View-specific settings now persist in the .base file** — color maps, time scale, show/hide colors, column widths, and collapsed groups are all stored directly in the .base view definition alongside native Bases properties. Settings travel with the base file (sync, rename, delete), eliminating orphaned entries and a separate data.json cleanup step.
+- **Direct file writes bypass Bases' save pipeline** — Bases' `requestSave()` cycle destroys and recreates the view, causing a white flash. Custom key changes now write directly to the .base file via `vault.modify()`, persisting without flicker.
 
 ### Bug Fixes
-- **Label column resize now persists** — the first column (label/name) no longer snaps back to its default width after resize. The root cause was `labelColWidth` not being persisted to the .base file; Bases' save cycle clears in-memory overrides, so the value was lost. Added `labelColWidth` to custom key persistence and made `getNumericConfig` coerce string values to numbers.
-- **Bar colors now persist reliably** — changing a color via the palette and reloading the view preserves the selection. The root cause was a missing `requestSave()` call; `config.set()` + `requestSave()` persists all keys including custom ones, contrary to the earlier assumption that Bases stripped unknown keys (closes #7).
+- **Label column resize now persists** — the first column no longer snaps back to its default width after resize (closes #7).
+- **No white flicker on color or column changes** — color palette, column resize, time scale, show/hide colors, and zoom all update smoothly without the view being destroyed and recreated.
 
 ## 0.1.7
 
