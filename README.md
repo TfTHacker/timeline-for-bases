@@ -50,6 +50,7 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 - **Week start** — Monday or Sunday, set in plugin settings
 
 **Task Bars**
+- **Dual property styling** — map one property to bar fill and another to the bar border
 - **Drag to move** — drag a bar to shift start and end dates; writes back to frontmatter on release
 - **Resize** — drag the left or right edge of a bar to adjust start or end date independently
 - **Multi-select** — Shift+click to select multiple bars; drag any selected bar to move them all together
@@ -83,7 +84,7 @@ Timeline for Bases adds a **Gantt-style timeline view** to Obsidian Bases. Point
 
 **Other**
 - **Export PNG** — captures the current timeline view and saves it to the vault root
-- **Create Sample Base** — settings button that generates a "Timeline Sample" folder with 20 vacation-planning tasks and a ready-to-use base
+- **Create Sample Base** — settings button that generates a "Timeline Sample" folder with 20 vacation-planning tasks assigned across Patrick, Maya, and Ethan, plus a ready-to-use base with `assigned` visible in the frozen property columns
 
 ### Configuration (per view)
 

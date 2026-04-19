@@ -343,6 +343,16 @@
 	font-size: 0.82rem;
 }
 
+.bases-timeline-config-label--inline {
+	min-width: auto;
+	margin-left: 8px;
+}
+
+.bases-timeline-config-select--inline {
+	flex: 0 0 auto;
+	width: 78px;
+}
+
 .bases-timeline-config-value {
 	font-size: 0.82rem;
 	color: var(--text-muted);
@@ -1322,15 +1332,22 @@ body.bases-timeline-resizing * {
 	opacity: 0.2;
 }
 
+.bases-timeline-style-section {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
 .bases-timeline-bar {
+	--tl-bar-border-color: rgba(0, 0, 0, 0.1);
 	position: absolute;
 	height: 18px;
 	border-radius: 4px;
 	background: var(--interactive-accent);
-	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15), inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15), 0 0 0 1px var(--background-primary), inset 0 0 0 1px rgba(255, 255, 255, 0.16);
 	cursor: grab;
 	transition: box-shadow 0.15s ease, transform 0.15s ease, filter 0.15s ease;
-	border: 1px solid rgba(0, 0, 0, 0.1);
+	border: var(--tl-bar-border-width, 2px) solid var(--tl-bar-border-color);
 	min-width: 4px; /* pixel minimum — never stretches bar beyond its true column span */
 }
 
@@ -1399,7 +1416,7 @@ body.bases-timeline-resizing * {
 
 /* Enhanced bar hover state - more prominent lift and glow */
 .bases-timeline-bar:hover {
-	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25), inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--background-primary), inset 0 0 0 1px rgba(255, 255, 255, 0.4);
 	transform: scaleY(1.25) translateY(-1px);
 	transform-origin: center;
 	filter: brightness(1.08);

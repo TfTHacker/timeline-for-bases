@@ -55,40 +55,40 @@ export default class TimelinePlugin extends Plugin {
 		};
 		const addDays = (d: Date, n: number) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
 
-		const tasks: { name: string; start: number; duration: number; priority: 'High' | 'Medium' | 'Low' }[] = [
+		const tasks: { name: string; start: number; duration: number; priority: 'High' | 'Medium' | 'Low'; assigned: 'Patrick' | 'Maya' | 'Ethan' }[] = [
 			// Week 1 — foundations (budget + passports run in parallel)
-			{ name: 'Set vacation budget',             start: 0,  duration: 4,  priority: 'High'   },
-			{ name: 'Check passport validity',         start: 0,  duration: 2,  priority: 'High'   },
-			{ name: 'Choose destination',              start: 3,  duration: 4,  priority: 'High'   },
-			{ name: 'Agree on travel dates',           start: 3,  duration: 2,  priority: 'Low'    },
+			{ name: 'Set vacation budget',             start: 0,  duration: 4,  priority: 'High',   assigned: 'Patrick' },
+			{ name: 'Check passport validity',         start: 0,  duration: 2,  priority: 'High',   assigned: 'Maya'    },
+			{ name: 'Choose destination',              start: 3,  duration: 4,  priority: 'High',   assigned: 'Patrick' },
+			{ name: 'Agree on travel dates',           start: 3,  duration: 2,  priority: 'Low',    assigned: 'Ethan'   },
 			// Week 2 — research phase (flights + accommodation researched in parallel)
-			{ name: 'Research flights',                start: 6,  duration: 4,  priority: 'Medium' },
-			{ name: 'Research accommodation options',  start: 6,  duration: 5,  priority: 'Medium' },
-			{ name: 'Apply for visas if required',     start: 7,  duration: 10, priority: 'High'   },
-			{ name: 'Get travel vaccinations',         start: 8,  duration: 3,  priority: 'Low'    },
+			{ name: 'Research flights',                start: 6,  duration: 4,  priority: 'Medium', assigned: 'Patrick' },
+			{ name: 'Research accommodation options',  start: 6,  duration: 5,  priority: 'Medium', assigned: 'Maya'    },
+			{ name: 'Apply for visas if required',     start: 7,  duration: 10, priority: 'High',   assigned: 'Patrick' },
+			{ name: 'Get travel vaccinations',         start: 8,  duration: 3,  priority: 'Low',    assigned: 'Ethan'   },
 			// Week 2–3 — bookings (flights + accommodation booked in parallel)
-			{ name: 'Book flights',                    start: 12, duration: 2,  priority: 'High'   },
-			{ name: 'Book accommodation',              start: 12, duration: 2,  priority: 'High'   },
-			{ name: 'Purchase travel insurance',       start: 14, duration: 2,  priority: 'High'   },
+			{ name: 'Book flights',                    start: 12, duration: 2,  priority: 'High',   assigned: 'Patrick' },
+			{ name: 'Book accommodation',              start: 12, duration: 2,  priority: 'High',   assigned: 'Maya'    },
+			{ name: 'Purchase travel insurance',       start: 14, duration: 2,  priority: 'High',   assigned: 'Patrick' },
 			// Week 3 — planning
-			{ name: 'Plan daily itinerary',            start: 17, duration: 7,  priority: 'Medium' },
-			{ name: 'Research local transport',        start: 17, duration: 4,  priority: 'Low'    },
-			{ name: 'Book tours and activities',       start: 21, duration: 4,  priority: 'Medium' },
+			{ name: 'Plan daily itinerary',            start: 17, duration: 7,  priority: 'Medium', assigned: 'Maya'    },
+			{ name: 'Research local transport',        start: 17, duration: 4,  priority: 'Low',    assigned: 'Ethan'   },
+			{ name: 'Book tours and activities',       start: 21, duration: 4,  priority: 'Medium', assigned: 'Maya'    },
 			// Week 4 — logistics (pet care + house sitter arranged in parallel)
-			{ name: 'Arrange pet care',                start: 22, duration: 3,  priority: 'Medium' },
-			{ name: 'Arrange house sitter',            start: 22, duration: 3,  priority: 'Low'    },
-			{ name: 'Notify bank of travel dates',     start: 25, duration: 1,  priority: 'Low'    },
-			{ name: 'Buy travel accessories',          start: 25, duration: 3,  priority: 'Low'    },
+			{ name: 'Arrange pet care',                start: 22, duration: 3,  priority: 'Medium', assigned: 'Ethan'   },
+			{ name: 'Arrange house sitter',            start: 22, duration: 3,  priority: 'Low',    assigned: 'Patrick' },
+			{ name: 'Notify bank of travel dates',     start: 25, duration: 1,  priority: 'Low',    assigned: 'Patrick' },
+			{ name: 'Buy travel accessories',          start: 25, duration: 3,  priority: 'Low',    assigned: 'Maya'    },
 			// Final days (packing + confirm bookings run in parallel)
-			{ name: 'Pack luggage',                    start: 29, duration: 2,  priority: 'Low'    },
-			{ name: 'Confirm all bookings',            start: 29, duration: 1,  priority: 'High'   },
+			{ name: 'Pack luggage',                    start: 29, duration: 2,  priority: 'Low',    assigned: 'Ethan'   },
+			{ name: 'Confirm all bookings',            start: 29, duration: 1,  priority: 'High',   assigned: 'Patrick' },
 		];
 
 		for (const task of tasks) {
 			const startDate = addDays(today, task.start);
 			const endDate = addDays(today, task.start + task.duration);
 			const filePath = normalizePath(`${notesFolder}/${task.name}.md`);
-			const content = `---\nstart: ${fmt(startDate)}\nend: ${fmt(endDate)}\npriority: ${task.priority}\nstatus: open\n---\n\n# ${task.name}\n`;
+			const content = `---\nstart: ${fmt(startDate)}\nend: ${fmt(endDate)}\npriority: ${task.priority}\nassigned: ${task.assigned}\nstatus: open\n---\n\n# ${task.name}\n`;
 			if (!await this.app.vault.adapter.exists(filePath)) {
 				await this.app.vault.create(filePath, content);
 			}
@@ -109,11 +109,16 @@ views:
         direction: ASC
     startDate: note.start
     endDate: note.end
+    order:
+      - file.name
+      - priority
+      - assigned
+      - status
     colorBy: note.priority
-    colorMap:
-      High: "#e03131"
-      Medium: "#f59f00"
-      Low: "#2f9e44"
+    colorMap: 'High=#b02a37;Medium=#c27c0e;Low=var(--color-green)'
+    borderBy: note.assigned
+    borderColorMap: 'Patrick=color-mix(in srgb, var(--color-blue) 55%, white);Maya=color-mix(in srgb, var(--color-pink) 55%, white);Ethan=color-mix(in srgb, var(--color-purple) 65%, black)'
+    borderWidth: 2
     timeScale: day
     zoom: 1
 `;
@@ -190,7 +195,7 @@ class TimelineSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Create sample base')
-			.setDesc('Creates a "Timeline Sample" folder in your vault with 10 family vacation planning tasks and a ready-to-use Timeline base. Tasks use today\'s date as the starting point.')
+			.setDesc('Creates a "Timeline Sample" folder in your vault with 20 family vacation planning tasks, assigned across Patrick, Maya, and Ethan, plus a ready-to-use Timeline base. Tasks use today\'s date as the starting point.')
 			.addButton(btn => btn
 				.setButtonText('Create sample')
 				.setCta()

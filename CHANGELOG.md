@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.10
+
+### New Features
+- **Dual property styling** — map one property to bar fill and another to the bar border (closes #5)
+- **Border width control** — set border width from 1px to 4px
+
+### Improvements
+- **Updated sample base** — sample tasks now include `assigned`, show border styling, and use the tuned default sample colors
+- **Cleaner config layout** — `Border by` and `Border width` now appear on the same line
+
+### Bug Fixes
+- **Legacy styling preserved** — timelines without border styling keep the old thin neutral border
+
 ## 0.1.9
 
 ### Bug Fixes

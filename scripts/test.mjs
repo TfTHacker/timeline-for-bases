@@ -27,6 +27,7 @@ const tsconfig = {
 		path.join(repoRoot, 'src/timeline-date.ts'),
 		path.join(repoRoot, 'src/timeline-drag.ts'),
 		path.join(repoRoot, 'src/timeline-persistence.ts'),
+		path.join(repoRoot, 'src/timeline-style-config.ts'),
 		path.join(repoRoot, 'tests/**/*.test.ts'),
 	],
 };

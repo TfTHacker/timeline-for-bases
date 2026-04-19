@@ -32,6 +32,16 @@ import {
 	resolveResizeEndRange,
 	resolveResizeStartRange,
 } from './timeline-drag';
+import {
+	ALL_CUSTOM_KEYS,
+	CUSTOM_NUMERIC_KEYS,
+	CUSTOM_STRING_KEYS,
+	CUSTOM_STRING_SCALAR_KEYS,
+	decodeStyleMap,
+	encodeStyleMap,
+	getClampedBorderWidth,
+	getCompleteStyleMap,
+} from './timeline-style-config';
 
 interface TimelineConfig {
 	startDateProp: BasesPropertyId | null;
@@ -40,6 +50,9 @@ interface TimelineConfig {
 	orderedProps: BasesPropertyId[];
 	colorProp: BasesPropertyId | null;
 	colorMap: Record<string, string>;
+	borderProp: BasesPropertyId | null;
+	borderColorMap: Record<string, string>;
+	borderWidth: number;
 	zoom: number;
 	timeScale: 'day' | 'week' | 'month' | 'quarter' | 'year';
 	weekStart: 'monday' | 'sunday';
@@ -88,9 +101,17 @@ const PALETTE: string[] = [
 	'var(--color-base-60)',
 ];
 
-const DEFAULT_COLORS = PALETTE;
-
 const MAX_COLOR_VALUES = 10;
+
+interface StyleConfigSpec {
+	sectionTitle: string;
+	sectionRole: 'fill' | 'border';
+	propKey: 'colorBy' | 'borderBy';
+	mapKey: 'colorMap' | 'borderColorMap';
+	selectedProp: BasesPropertyId | null;
+	selectedMap: Record<string, string>;
+	applyToBars: (value: string, color: string) => void;
+}
 
 interface DrawState {
 	entryPath: string;
@@ -273,6 +294,7 @@ export class TimelineView extends BasesView {
 		this.containerEl.setAttribute('data-density', 'compact');
 		this.containerEl.style.setProperty('--timeline-label-col-width', `${config.labelColWidth}px`);
 		this.containerEl.style.setProperty('--timeline-frozen-width', `${config.frozenWidth}px`);
+		this.containerEl.style.setProperty('--tl-bar-border-width', `${config.borderWidth}px`);
 
 		this.renderHeader(config);
 		this.renderControls(config);
@@ -282,12 +304,18 @@ export class TimelineView extends BasesView {
 	private loadConfig(): TimelineConfig {
 		const startDateProp = this.config.getAsPropertyId('startDate');
 		const endDateProp = this.config.getAsPropertyId('endDate');
-		// colorBy isn't a declared Bases option, so config.getAsPropertyId() won't find it
-		// after a save/reload cycle. Read it from overrides first (set in the current
-		// session), then from the raw YAML view data, then from Bases config as fallback.
+		// colorBy / borderBy aren't declared Bases options, so config.getAsPropertyId()
+		// won't find them after a save/reload cycle. Read them from overrides first,
+		// then from raw YAML view data, then from Bases config as fallback.
 		const colorProp = this.getPropertyIdFromConfig('colorBy');
+		const borderProp = this.getPropertyIdFromConfig('borderBy');
 		const rawConfig = this.getRawConfig();
-		const colorMap = this.getColorMapFromConfig();
+		const colorMap = this.getStyleMapFromConfig('colorMap');
+		const borderColorMap = this.getStyleMapFromConfig('borderColorMap');
+		const borderWidth = getClampedBorderWidth(
+			this.getViewConfigValue('borderWidth'),
+			borderProp ? 2 : 1,
+		);
 		const zoom = this.getNumericConfig('zoom', 1, 1, 5);
 		const timeScale = this.getStringConfig('timeScale', 'week', ['day', 'week', 'month', 'quarter', 'year']) as 'day' | 'week' | 'month' | 'quarter' | 'year';
 		const weekStart = this.plugin.settings.defaultWeekStart;
@@ -327,11 +355,11 @@ export class TimelineView extends BasesView {
 		}
 		const propColWidths: Record<string, number> = {};
 		let frozenWidth = labelColWidth;
-		extraProps.forEach((prop, index) => {
+		extraProps.forEach((prop) => {
 			const key = JSON.stringify(prop);
 			// encodeMap strips JSON quotes from keys for clean YAML storage,
 			// so savedWidths uses plain keys like "note.priority" while
-			// JSON.stringify produces '"note.priority"'.  Check both forms.
+			// JSON.stringify produces '"note.priority"'. Check both forms.
 			const plainKey = String(prop);
 			const w = (key in savedWidths) ? savedWidths[key]
 				: (plainKey in savedWidths) ? savedWidths[plainKey]
@@ -347,14 +375,17 @@ export class TimelineView extends BasesView {
 			orderedProps,
 			colorProp,
 			colorMap,
+			borderProp,
+			borderColorMap,
+			borderWidth,
 			zoom,
 			timeScale,
 			weekStart,
 			labelColWidth,
-		groupByProp,
-		startWritable,
-		endWritable,
-		groupWritable,
+			groupByProp,
+			startWritable,
+			endWritable,
+			groupWritable,
 			extraProps,
 			propColWidths,
 			frozenWidth,
@@ -440,11 +471,6 @@ export class TimelineView extends BasesView {
 		const indent = '    ';
 		let changed = false;
 
-		const CUSTOM_STRING_KEYS = ['colorMap', 'propColWidths', 'collapsedGroups'];
-		const CUSTOM_NUMERIC_KEYS = ['labelColWidth'];
-		const CUSTOM_STRING_SCALAR_KEYS = ['timeScale', 'showColors', 'colorBy'];
-		const ALL_CUSTOM_KEYS = [...CUSTOM_STRING_KEYS, ...CUSTOM_NUMERIC_KEYS, ...CUSTOM_STRING_SCALAR_KEYS];
-
 		// Inject/update keys from the current session's overrides
 		for (const key of ALL_CUSTOM_KEYS) {
 			if (!(key in this._viewConfigOverrides)) continue;
@@ -516,14 +542,6 @@ export class TimelineView extends BasesView {
 		let yaml = getViewData.call(hostView);
 		const indent = '    '; // .base view entries are indented 4 spaces
 		let changed = false;
-
-		// Custom keys that need manual YAML injection because Bases doesn't serialize them.
-		// String keys use semicolon-delimited format and need single-quoting.
-		// Numeric keys can be written as plain YAML scalars.
-		const CUSTOM_STRING_KEYS = ['colorMap', 'propColWidths', 'collapsedGroups'];
-		const CUSTOM_NUMERIC_KEYS = ['labelColWidth'];
-		const CUSTOM_STRING_SCALAR_KEYS = ['timeScale', 'showColors', 'colorBy'];
-		const ALL_CUSTOM_KEYS = [...CUSTOM_STRING_KEYS, ...CUSTOM_NUMERIC_KEYS, ...CUSTOM_STRING_SCALAR_KEYS];
 
 		// 1) Inject/update keys from the current session's overrides
 		const overrides: Record<string, unknown> = {};
@@ -601,43 +619,17 @@ export class TimelineView extends BasesView {
 
 	/** Encode a Record<string, string> as a semicolon-delimited string for persistence.
 	 *  Uses `=` as key/value separator and `;` as pair separator — both are
-	 *  YAML-safe unquoted characters, unlike `:` and `|`.  Also strips outer
-	 *  double-quotes from keys (e.g. `"note.start"` → `note.start`) because
-	 *  YAML interprets `"` as the start of a double-quoted string. */
+	 *  YAML-safe unquoted characters, unlike `:` and `|`. */
 	private encodeMap(map: Record<string, string>): string {
-		return Object.entries(map).map(([k, v]) => {
-			// Strip outer double-quotes from keys (from JSON.stringify of BasesPropertyId)
-			const safeKey = k.startsWith('"') && k.endsWith('"') ? k.slice(1, -1) : k;
-			return `${safeKey}=${v}`;
-		}).join(';');
+		return encodeStyleMap(map);
 	}
 
-	/** Decode a semicolon-delimited string back into a Record<string, string>.
-	 *  Handles both the current `=`/`;` format and the legacy `:`/`|` format
-	 *  for backward compatibility with existing .base files.  Keys are stored
-	 *  as plain strings (no JSON-quoting) — they must match `value.toString()`
-	 *  output from Bases, which uses plain strings like "High" or
-	 *  "Agree on travel dates.md", not JSON-stringified BasesPropertyIds. */
 	private decodeMap(encoded: string): Record<string, string> {
-		const result: Record<string, string> = {};
-		if (!encoded) return result;
-		// Detect legacy format: if the string contains `|` but not `;`, it's old-style
-		const useLegacy = encoded.includes('|') && !encoded.includes(';');
-		const pairSep = useLegacy ? '|' : ';';
-		const kvSep = useLegacy ? ':' : '=';
-		for (const pair of encoded.split(pairSep)) {
-			const idx = pair.indexOf(kvSep);
-			if (idx > 0) {
-				const key = pair.slice(0, idx);
-				const val = pair.slice(idx + 1);
-				result[key] = val;
-			}
-		}
-		return result;
+		return decodeStyleMap(encoded);
 	}
 
-	private getColorMapFromConfig(): Record<string, string> {
-		const raw = this.getViewConfigValue('colorMap');
+	private getStyleMapFromConfig(key: string): Record<string, string> {
+		const raw = this.getViewConfigValue(key);
 		if (typeof raw === 'string') return this.decodeMap(raw);
 		// Legacy: in-memory object from current session before reload
 		if (raw && typeof raw === 'object') return { ...(raw as Record<string, string>) };
@@ -842,64 +834,92 @@ export class TimelineView extends BasesView {
 		this.controlsEl.toggleClass('is-collapsed', !isVisible);
 		if (!isVisible) return;
 
+		this.renderStyleControls(config, {
+			sectionTitle: 'Color by',
+			sectionRole: 'fill',
+			propKey: 'colorBy',
+			mapKey: 'colorMap',
+			selectedProp: config.colorProp,
+			selectedMap: config.colorMap,
+			applyToBars: (value, color) => this.applyFillColorToBars(value, color),
+		});
+
+		this.renderStyleControls(config, {
+			sectionTitle: 'Border by',
+			sectionRole: 'border',
+			propKey: 'borderBy',
+			mapKey: 'borderColorMap',
+			selectedProp: config.borderProp,
+			selectedMap: config.borderColorMap,
+			applyToBars: (value, color) => this.applyBorderColorToBars(value, color),
+		});
+	}
+
+	private renderStyleControls(config: TimelineConfig, spec: StyleConfigSpec): void {
 		const allProps = [...(this.allProperties ?? [])].sort((a, b) =>
 			this.getPropertyName(a).localeCompare(this.getPropertyName(b))
 		);
 
-		// Color by property selector
-		const propRowEl = this.controlsEl.createDiv({ cls: 'bases-timeline-config-row' });
-		propRowEl.createSpan({ cls: 'bases-timeline-config-label', text: 'Color by:' });
+		const sectionEl = this.controlsEl.createDiv({ cls: 'bases-timeline-style-section' });
+		sectionEl.setAttribute('data-style-role', spec.sectionRole);
+
+		const propRowEl = sectionEl.createDiv({ cls: 'bases-timeline-config-row' });
+		propRowEl.createSpan({ cls: 'bases-timeline-config-label', text: `${spec.sectionTitle}:` });
 
 		const propSelect = propRowEl.createEl('select', { cls: 'bases-timeline-config-select' });
 		propSelect.createEl('option', { value: '', text: '— none —' });
 		allProps.forEach(prop => {
 			const name = this.getPropertyName(prop);
 			const opt = propSelect.createEl('option', { value: JSON.stringify(prop), text: name });
-			if (config.colorProp && JSON.stringify(config.colorProp) === JSON.stringify(prop)) {
+			if (spec.selectedProp && JSON.stringify(spec.selectedProp) === JSON.stringify(prop)) {
 				opt.selected = true;
 			}
 		});
 
+		if (spec.sectionRole === 'border') {
+			this.renderBorderWidthControl(propRowEl, config);
+		}
+
 		propSelect.addEventListener('change', () => {
 			const val = propSelect.value;
 			if (!val) {
-				this.setViewConfigValue('colorBy', null, true);
+				this.setViewConfigValue(spec.propKey, null, true);
 			} else {
 				try {
-					this.setViewConfigValue('colorBy', JSON.parse(val), true);
-				} catch { /* ignore */ }
+					this.setViewConfigValue(spec.propKey, JSON.parse(val), true);
+				} catch {
+					return;
+				}
 			}
 			this.render();
 		});
 
-		if (!config.colorProp) return;
+		if (!spec.selectedProp) return;
 
-		// Color pickers for each unique value (capped at MAX_COLOR_VALUES)
-		const allUniqueValues = this.getUniqueColorValues(config.colorProp);
-		const { colorMap, changed } = this.ensureColorMap(config.colorMap, allUniqueValues);
+		const allUniqueValues = this.getUniqueStyleValues(spec.selectedProp);
+		const { styleMap, changed } = getCompleteStyleMap(spec.selectedMap, allUniqueValues, PALETTE);
 		if (changed) {
-			this.setViewConfigValue('colorMap', this.encodeMap(colorMap), true);
-			config.colorMap = colorMap;
+			this.setViewConfigValue(spec.mapKey, this.encodeMap(styleMap), true);
+			spec.selectedMap = styleMap;
 		}
 
 		if (allUniqueValues.length === 0) {
-			this.controlsEl.createDiv({ cls: 'bases-timeline-controls-empty', text: 'No values found for the selected property.' });
+			sectionEl.createDiv({ cls: 'bases-timeline-controls-empty', text: 'No values found for the selected property.' });
 			return;
 		}
 
 		const uniqueValues = allUniqueValues.slice(0, MAX_COLOR_VALUES);
-
 		let openPalette: HTMLElement | null = null;
+		const listEl = sectionEl.createDiv({ cls: 'bases-timeline-color-list' });
 
-		const listEl = this.controlsEl.createDiv({ cls: 'bases-timeline-color-list' });
 		uniqueValues.forEach(value => {
 			const itemEl = listEl.createDiv({ cls: 'bases-timeline-color-item' });
 			itemEl.createDiv({ cls: 'bases-timeline-color-label', text: value });
 
-			const currentColor = colorMap[value] || PALETTE[0];
+			const currentColor = spec.selectedMap[value] || PALETTE[0];
 			const dot = itemEl.createDiv({ cls: 'bases-timeline-swatch is-current' });
 			dot.style.background = currentColor;
-			dot.setAttribute('aria-label', 'Pick color');
+			dot.setAttribute('aria-label', `Pick ${spec.sectionTitle.toLowerCase()} color`);
 
 			const paletteEl = itemEl.createDiv({ cls: 'bases-timeline-swatch-popup is-hidden' });
 			PALETTE.forEach(color => {
@@ -908,13 +928,10 @@ export class TimelineView extends BasesView {
 				if (currentColor === color) swatch.addClass('is-selected');
 				swatch.addEventListener('click', (e) => {
 					e.stopPropagation();
-					colorMap[value] = color;
-					this.setViewConfigValue('colorMap', this.encodeMap(colorMap), true);
-					// Update bar colors in-place instead of full re-render
-					this.applyColorToBars(value, color);
-					// Update swatch selection state
-					const row = swatch.closest('.bases-timeline-color-row');
-					if (row) row.querySelectorAll('.bases-timeline-swatch').forEach(s => s.removeClass('is-selected'));
+					spec.selectedMap[value] = color;
+					this.setViewConfigValue(spec.mapKey, this.encodeMap(spec.selectedMap), true);
+					spec.applyToBars(value, color);
+					paletteEl.querySelectorAll('.bases-timeline-swatch').forEach(s => s.removeClass('is-selected'));
 					swatch.addClass('is-selected');
 				});
 			});
@@ -937,11 +954,25 @@ export class TimelineView extends BasesView {
 		});
 
 		if (allUniqueValues.length > MAX_COLOR_VALUES) {
-			this.controlsEl.createDiv({
+			sectionEl.createDiv({
 				cls: 'bases-timeline-color-cap-warning',
 				text: `Showing ${MAX_COLOR_VALUES} of ${allUniqueValues.length} values. Choose a property with fewer unique values for individual colors.`,
 			});
 		}
+	}
+
+	private renderBorderWidthControl(rowEl: HTMLElement, config: TimelineConfig): void {
+		rowEl.createSpan({ cls: 'bases-timeline-config-label bases-timeline-config-label--inline', text: 'Border width:' });
+		const selectEl = rowEl.createEl('select', { cls: 'bases-timeline-config-select bases-timeline-config-select--inline' });
+		[1, 2, 3, 4].forEach(width => {
+			const opt = selectEl.createEl('option', { value: String(width), text: `${width}px` });
+			if (config.borderWidth === width) opt.selected = true;
+		});
+		selectEl.addEventListener('change', () => {
+			const next = getClampedBorderWidth(selectEl.value, config.borderWidth);
+			this.setViewConfigValue('borderWidth', next, true);
+			this.render();
+		});
 	}
 
 	private getPropertyName(prop: BasesPropertyId): string {
@@ -2725,15 +2756,26 @@ export class TimelineView extends BasesView {
 		barEl.style.left = `${left}%`;
 		barEl.style.width = `${width}%`;
 
-		const color = this.getEntryColor(entry, config.colorProp, config.colorMap);
-		if (color) {
-			barEl.style.backgroundColor = color;
+		const fillColor = this.getEntryStyleColor(entry, config.colorProp, config.colorMap);
+		if (fillColor) {
+			barEl.style.backgroundColor = fillColor;
 		}
-		// Store the color value key for in-place color updates
+		const borderColor = this.getEntryStyleColor(entry, config.borderProp, config.borderColorMap);
+		if (borderColor) {
+			barEl.style.borderColor = borderColor;
+			barEl.style.setProperty('--tl-bar-border-color', borderColor);
+		}
+		// Store the color value keys for in-place color updates
 		if (config.colorProp) {
 			const colorVal = entry.getValue(config.colorProp);
 			if (colorVal?.isTruthy()) {
 				barEl.setAttribute('data-color-value', colorVal.toString());
+			}
+		}
+		if (config.borderProp) {
+			const borderVal = entry.getValue(config.borderProp);
+			if (borderVal?.isTruthy()) {
+				barEl.setAttribute('data-border-value', borderVal.toString());
 			}
 		}
 
@@ -3744,46 +3786,43 @@ export class TimelineView extends BasesView {
 		return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
 	}
 
-	private getUniqueColorValues(colorProp: BasesPropertyId): string[] {
+	private getUniqueStyleValues(styleProp: BasesPropertyId): string[] {
 		const values = new Set<string>();
 		for (const entry of this.data.data) {
-			const value = entry.getValue(colorProp);
+			const value = entry.getValue(styleProp);
 			if (!value || !value.isTruthy()) continue;
 			values.add(value.toString());
 		}
 		return Array.from(values).sort((a, b) => a.localeCompare(b));
 	}
 
-	private ensureColorMap(colorMap: Record<string, string>, values: string[]): { colorMap: Record<string, string>; changed: boolean } {
-		let changed = false;
-		const map = { ...colorMap };
-		values.forEach((value, index) => {
-			if (!map[value]) {
-				map[value] = DEFAULT_COLORS[index % DEFAULT_COLORS.length];
-				changed = true;
-			}
-		});
-		return { colorMap: map, changed };
-	}
-
-	private getEntryColor(entry: BasesEntry, colorProp: BasesPropertyId | null, colorMap: Record<string, string>): string | null {
-		if (!colorProp) return null;
-		const value = entry.getValue(colorProp);
+	private getEntryStyleColor(entry: BasesEntry, styleProp: BasesPropertyId | null, styleMap: Record<string, string>): string | null {
+		if (!styleProp) return null;
+		const value = entry.getValue(styleProp);
 		if (!value || !value.isTruthy()) return null;
 		const key = value.toString();
-		return colorMap[key] || null;
+		return styleMap[key] || null;
 	}
 
-	/** Update bar background colors in-place for a given color value key.
-	 *  Called after color swap to avoid a full re-render. */
-	private applyColorToBars(colorValue: string, newColor: string): void {
+	private applyFillColorToBars(colorValue: string, newColor: string): void {
 		this.containerEl.querySelectorAll<HTMLElement>(`.bases-timeline-bar[data-color-value="${CSS.escape(colorValue)}"]`).forEach(bar => {
 			bar.style.backgroundColor = newColor;
 		});
-		// Also update the current-color dot in the controls panel
-		const colorRow = this.controlsEl.querySelector(`.bases-timeline-color-row`);
-		// Find the label matching this value and update its current dot
-		this.controlsEl.querySelectorAll<HTMLElement>('.bases-timeline-color-item').forEach(item => {
+		this.updateStyleControlDot('fill', colorValue, newColor);
+	}
+
+	private applyBorderColorToBars(colorValue: string, newColor: string): void {
+		this.containerEl.querySelectorAll<HTMLElement>(`.bases-timeline-bar[data-border-value="${CSS.escape(colorValue)}"]`).forEach(bar => {
+			bar.style.borderColor = newColor;
+			bar.style.setProperty('--tl-bar-border-color', newColor);
+		});
+		this.updateStyleControlDot('border', colorValue, newColor);
+	}
+
+	private updateStyleControlDot(role: 'fill' | 'border', colorValue: string, newColor: string): void {
+		const section = this.controlsEl.querySelector<HTMLElement>(`.bases-timeline-style-section[data-style-role="${role}"]`);
+		if (!section) return;
+		section.querySelectorAll<HTMLElement>('.bases-timeline-color-item').forEach(item => {
 			const label = item.querySelector('.bases-timeline-color-label');
 			if (label?.textContent === colorValue) {
 				const dot = item.querySelector('.bases-timeline-swatch.is-current') as HTMLElement | null;
