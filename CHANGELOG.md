@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.9
+
+### Bug Fixes
+- Fixed PNG export crashing on modern CSS `color()` functions — replaced html2canvas with html-to-image
+- Removed scrollbars from exported PNG images
+
 ## 0.1.8
 
 ### Persistence Overhaul
