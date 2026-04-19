@@ -49,6 +49,8 @@ interface TimelineConfig {
 	/** Whether the start/end date properties are writable frontmatter fields (not formulas or file metadata). */
 	startWritable: boolean;
 	endWritable: boolean;
+	/** Whether the groupBy property is a writable frontmatter field (e.g. note.status). False for file.* or formula properties. */
+	groupWritable: boolean;
 	/** Ordered list of extra properties to display as columns. */
 	extraProps: BasesPropertyId[];
 	/** Width (px) for each extra prop column, keyed by JSON.stringify(propId). */
@@ -301,6 +303,7 @@ export class TimelineView extends BasesView {
 			prop !== null && String(prop).startsWith('note.');
 		const startWritable = isWritable(startDateProp);
 		const endWritable   = isWritable(endDateProp);
+		const groupWritable = isWritable(groupByProp as BasesPropertyId | null);
 
 		// The first ordered property becomes the primary frozen column.
 		const orderedProps = this.config.getOrder();
@@ -348,9 +351,10 @@ export class TimelineView extends BasesView {
 			timeScale,
 			weekStart,
 			labelColWidth,
-			groupByProp,
-			startWritable,
-			endWritable,
+		groupByProp,
+		startWritable,
+		endWritable,
+		groupWritable,
 			extraProps,
 			propColWidths,
 			frozenWidth,
@@ -374,6 +378,19 @@ export class TimelineView extends BasesView {
 		};
 	}
 
+	/** Find the Bases leaf that owns this TimelineView.
+	 *  Iterates all bases leaves and returns the one whose view's
+	 *  DOM subtree contains this.containerEl — avoiding the bug of
+	 *  always grabbing the first leaf when multiple are open. */
+	private _getHostBasesLeaf(): import('obsidian').WorkspaceLeaf | undefined {
+		for (const leaf of this.app.workspace.getLeavesOfType('bases')) {
+			const viewEl = (leaf.view as { containerEl?: HTMLElement })?.containerEl;
+			if (viewEl && viewEl.contains(this.containerEl)) return leaf;
+		}
+		// Fallback: if DOM check fails (e.g. not yet mounted), use first leaf
+		return this.app.workspace.getLeavesOfType('bases')[0];
+	}
+
 	private getViewConfigValue(key: string): unknown {
 		if (key in this._viewConfigOverrides) return this._viewConfigOverrides[key];
 		const saved = this.getSavedViewConfig();
@@ -385,7 +402,7 @@ export class TimelineView extends BasesView {
 		this._viewConfigOverrides[key] = value as unknown;
 		this.getRawConfig()[key] = value as unknown;
 
-		const hostView = this.app.workspace.getLeavesOfType('bases')[0]?.view as
+		const hostView = this._getHostBasesLeaf()?.view as
 			| { getViewData?: () => string; setViewData?: (data: string, clear: boolean) => void; requestSave?: () => Promise<void> | void }
 			| undefined;
 
@@ -412,7 +429,7 @@ export class TimelineView extends BasesView {
 	 *  and writes back via vault.modify(). */
 	private async _persistCustomKeysDirect(hostView: { getViewData?: () => string } | undefined): Promise<void> {
 		// Get the .base file path from the leaf
-		const leaf = this.app.workspace.getLeavesOfType('bases')[0];
+		const leaf = this._getHostBasesLeaf();
 		const file = (leaf?.view as { file?: { path?: string } } | undefined)?.file;
 		if (!file?.path) return;
 
@@ -709,7 +726,7 @@ export class TimelineView extends BasesView {
 			return (str !== '[object Object]' ? str : null) as BasesPropertyId | null;
 		}
 		// 2) Parse from the host view's YAML data
-		const hostView = this.app.workspace.getLeavesOfType('bases')[0]?.view as
+		const hostView = this._getHostBasesLeaf()?.view as
 			| { getViewData?: () => string }
 			| undefined;
 		const getViewData = hostView?.getViewData;
@@ -2295,26 +2312,28 @@ export class TimelineView extends BasesView {
 		if (isGrouped) {
 			const groupHeaderEl = this.renderGroupHeading(containerEl, group, config, isCollapsed);
 
-			// Make the group header a drop target
-			groupHeaderEl.addEventListener('dragover', (e) => {
-				e.preventDefault();
-				this.containerEl.addClass('is-group-drag-active');
-				groupHeaderEl.addClass('is-drag-over');
-			});
-			groupHeaderEl.addEventListener('dragleave', () => {
-				groupHeaderEl.removeClass('is-drag-over');
-			});
-			groupHeaderEl.addEventListener('drop', (e) => {
-				e.preventDefault();
-				groupHeaderEl.removeClass('is-drag-over');
-				this.clearGroupDragState();
-				const raw = e.dataTransfer?.getData('text/plain');
-				if (!raw) return;
-				try {
-					const { path, fromGroup } = JSON.parse(raw) as { path: string; fromGroup: string };
-					void this._dropToGroup(path, fromGroup, groupLabel, config.groupByProp);
-				} catch { /* ignore malformed drag data */ }
+			// Make the group header a drop target (only for writable group properties)
+			if (config.groupWritable) {
+				groupHeaderEl.addEventListener('dragover', (e) => {
+					e.preventDefault();
+					this.containerEl.addClass('is-group-drag-active');
+					groupHeaderEl.addClass('is-drag-over');
 				});
+				groupHeaderEl.addEventListener('dragleave', () => {
+					groupHeaderEl.removeClass('is-drag-over');
+				});
+				groupHeaderEl.addEventListener('drop', (e) => {
+					e.preventDefault();
+					groupHeaderEl.removeClass('is-drag-over');
+					this.clearGroupDragState();
+					const raw = e.dataTransfer?.getData('text/plain');
+					if (!raw) return;
+					try {
+						const { path, fromGroup } = JSON.parse(raw) as { path: string; fromGroup: string };
+						void this._dropToGroup(path, fromGroup, groupLabel, config.groupByProp);
+					} catch { /* ignore malformed drag data */ }
+				});
+			}
 			}
 
 		let rowIndex = 0;
@@ -2441,7 +2460,7 @@ export class TimelineView extends BasesView {
 		rowEl.setAttribute('data-entry-path', entry.file.path);
 		this._rowElsByPath.set(entry.file.path, rowEl);
 
-		if (currentGroupLabel !== null) {
+		if (currentGroupLabel !== null && config.groupWritable) {
 			// Make the row itself a drop target (any row in another group works)
 			rowEl.addEventListener('dragover', (e) => {
 				const raw = e.dataTransfer?.types.includes('text/plain');
@@ -2467,7 +2486,7 @@ export class TimelineView extends BasesView {
 
 		const label = this.getEntryLabel(entry, config.primaryProp);
 		const labelEl = rowEl.createDiv({ cls: 'bases-timeline-label' });
-		if (currentGroupLabel !== null) {
+		if (currentGroupLabel !== null && config.groupWritable) {
 			labelEl.addClass('has-group-drag-handle');
 			const handle = labelEl.createDiv({ cls: 'bases-timeline-drag-handle', attr: { draggable: 'true', title: `Drag to move "${entry.file.basename}" to another group`, 'aria-label': 'Drag to move to another group' } });
 			setIcon(handle, 'grip-vertical');
@@ -2948,26 +2967,27 @@ export class TimelineView extends BasesView {
 	private async _dropToGroup(entryPath: string, fromGroupValue: string, toGroupValue: string, hintProp: string | null): Promise<void> {
 		if (fromGroupValue === toGroupValue) return;
 
+		// Only note.* properties are writable frontmatter fields — reject file.*/formula props
+		if (!hintProp || !String(hintProp).startsWith('note.')) {
+			new Notice('Timeline: drag-to-group is only supported for writable frontmatter properties (not file.* or formula properties)');
+			return;
+		}
+
 		const file = this.app.vault.getFileByPath(entryPath);
 		if (!file) return;
 
 		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
-		const groupByProp = hintProp
-			? String(hintProp).replace(/^note\./, '')
-			: null;
-		if (!groupByProp) {
-			new Notice('Timeline: drag-to-group is only supported when the view exposes a writable group property');
-			return;
-		}
+		const groupByProp = String(hintProp).replace(/^note\./, '');
 
-		const oldValue = String(fm[groupByProp] ?? '');
+		const wasAbsent = !(groupByProp in fm);
+		const oldValue = wasAbsent ? '__absent__' : String(fm[groupByProp] ?? '');
 
 		this._pushUndo([{
 			path: entryPath,
 			startKey: groupByProp,
 			endKey: '__group__',
 			before: { start: oldValue, end: '__group__' },
-			after:  { start: toGroupValue, end: '__group__' },
+			after:  { start: toGroupValue === 'Ungrouped' ? '__absent__' : toGroupValue, end: '__group__' },
 		}]);
 
 		try {
@@ -2987,13 +3007,49 @@ export class TimelineView extends BasesView {
 	private async _exportPng(): Promise<void> {
 		const el = this.bodyEl as HTMLElement;
 		try {
-			const html2canvas = (await import('html2canvas')).default;
-			const canvas = await html2canvas(el, {
+			const { toPng } = await import('html-to-image');
+
+			// Temporarily expand the scroller to show all content without scrollbars
+			const scroller = el.querySelector('.bases-timeline-scroller') as HTMLElement | null;
+			const saved: Array<{ el: HTMLElement; props: Record<string, string> }> = [];
+			if (scroller) {
+				const cs = getComputedStyle(scroller);
+				const overrides: Record<string, string> = {
+					overflow: 'visible',
+					overflowX: 'visible',
+					overflowY: 'visible',
+					width: scroller.scrollWidth + 'px',
+					height: scroller.scrollHeight + 'px',
+				};
+				saved.push({ el: scroller, props: {} });
+				for (const [k, v] of Object.entries(overrides)) {
+					saved[0].props[k] = scroller.style.getPropertyValue(k);
+					scroller.style.setProperty(k, v, 'important');
+				}
+				// Also hide native scrollbar gutters on the body container
+				if (getComputedStyle(el).overflow !== 'visible') {
+					saved.push({ el, props: { overflow: el.style.overflow, overflowX: el.style.overflowX, overflowY: el.style.overflowY } });
+					el.style.setProperty('overflow', 'visible', 'important');
+					el.style.setProperty('overflow-x', 'visible', 'important');
+					el.style.setProperty('overflow-y', 'visible', 'important');
+				}
+			}
+
+			const dataUrl = await toPng(el, {
 				backgroundColor: getComputedStyle(el).backgroundColor || '#fff',
-				scale: window.devicePixelRatio || 1,
-				useCORS: true,
+				pixelRatio: window.devicePixelRatio || 1,
+				style: {
+					transform: 'none',
+				},
+			}).finally(() => {
+				// Restore original styles
+				for (const { el: restoreEl, props } of saved) {
+					for (const [k, v] of Object.entries(props)) {
+						if (v !== undefined && v !== '') restoreEl.style.setProperty(k, v);
+						else restoreEl.style.removeProperty(k);
+					}
+				}
 			});
-			const dataUrl = canvas.toDataURL('image/png');
 			const base64 = dataUrl.split(',')[1] || '';
 			const binary = atob(base64);
 			const bytes = new Uint8Array(binary.length);
@@ -3166,10 +3222,22 @@ export class TimelineView extends BasesView {
 			await this.app.fileManager.processFrontMatter(file, fm => {
 				// Group-change records use endKey='__group__' sentinel
 				if (e.endKey === '__group__') {
-					fm[e.startKey] = target.start;
+					if (target.start === '__absent__') {
+						delete fm[e.startKey]; // property was absent — restore by deleting
+					} else {
+						fm[e.startKey] = target.start;
+					}
 				} else {
-					fm[e.startKey] = target.start;
-					fm[e.endKey]   = target.end;
+					if (target.start === '__absent__') {
+						delete fm[e.startKey];
+					} else {
+						fm[e.startKey] = target.start;
+					}
+					if (target.end === '__absent__') {
+						delete fm[e.endKey];
+					} else {
+						fm[e.endKey] = target.end;
+					}
 				}
 			});
 		}
