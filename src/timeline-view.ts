@@ -34,14 +34,22 @@ import {
 } from './timeline-drag';
 import {
 	ALL_CUSTOM_KEYS,
-	CUSTOM_NUMERIC_KEYS,
-	CUSTOM_STRING_KEYS,
-	CUSTOM_STRING_SCALAR_KEYS,
 	decodeStyleMap,
 	encodeStyleMap,
 	getClampedBorderWidth,
 	getCompleteStyleMap,
 } from './timeline-style-config';
+import { applyCustomKeysToYaml } from './timeline-base-yaml';
+import {
+	formatTickLabel,
+	getAxisFormatter,
+	getMinorGridTicks,
+	getTicksForScale,
+	reduceTicks,
+	snapEndToScale,
+	snapStartToScale,
+} from './timeline-axis';
+import { getTimelineCanvasWidth } from './timeline-canvas';
 
 interface TimelineConfig {
 	startDateProp: BasesPropertyId | null;
@@ -255,13 +263,6 @@ export class TimelineView extends BasesView {
 			filter: (prop: BasesPropertyId) => !prop.startsWith('file.'),
 			placeholder,
 		});
-		const anyPropertyOption = (displayName: string, key: string, placeholder: string): BasesPropertyOption => ({
-			displayName,
-			type: 'property',
-			key,
-			placeholder,
-		});
-
 		return [
 			{
 				displayName: 'Fields',
@@ -340,9 +341,9 @@ export class TimelineView extends BasesView {
 
 		// Per-prop column widths (persisted in .base file as encoded string)
 		const rawWidths = this.getViewConfigValue('propColWidths');
-		const savedWidthsRaw = (typeof rawWidths === 'string' ? this.decodeMap(rawWidths) : rawWidths ?? {});
+		const savedWidthsRaw = (typeof rawWidths === 'string' ? decodeStyleMap(rawWidths) : rawWidths ?? {});
 		const rawCollapsed = this.getViewConfigValue('collapsedGroups');
-		const collapsedGroupsRaw = (typeof rawCollapsed === 'string' ? this.decodeMap(rawCollapsed) : rawCollapsed ?? {});
+		const collapsedGroupsRaw = (typeof rawCollapsed === 'string' ? decodeStyleMap(rawCollapsed) : rawCollapsed ?? {});
 		// DecodeMap returns string values; parse numbers/booleans for type-safe access
 		const savedWidths: Record<string, number> = {};
 		for (const [k, v] of Object.entries(savedWidthsRaw)) {
@@ -454,12 +455,20 @@ export class TimelineView extends BasesView {
 		}
 	}
 
+	/** Collect overrides for custom keys in the current session. */
+	private _collectCustomOverrides(): Record<string, unknown> {
+		const overrides: Record<string, unknown> = {};
+		for (const key of ALL_CUSTOM_KEYS) {
+			if (key in this._viewConfigOverrides) overrides[key] = this._viewConfigOverrides[key];
+		}
+		return overrides;
+	}
+
 	/** Write custom keys directly to the .base file without triggering a
 	 *  Bases save cycle (which would recreate the view, causing a white flash).
 	 *  Reads the current file content, injects/updates custom keys in YAML,
 	 *  and writes back via vault.modify(). */
 	private async _persistCustomKeysDirect(hostView: { getViewData?: () => string } | undefined): Promise<void> {
-		// Get the .base file path from the leaf
 		const leaf = this._getHostBasesLeaf();
 		const file = (leaf?.view as { file?: { path?: string } } | undefined)?.file;
 		if (!file?.path) return;
@@ -467,170 +476,45 @@ export class TimelineView extends BasesView {
 		const getViewData = hostView?.getViewData;
 		if (typeof getViewData !== 'function') return;
 
-		let yaml = getViewData.call(hostView);
-		const indent = '    ';
-		let changed = false;
+		const { yaml, changed } = applyCustomKeysToYaml(
+			getViewData.call(hostView),
+			this._collectCustomOverrides(),
+		);
+		if (!changed) return;
 
-		// Inject/update keys from the current session's overrides
-		for (const key of ALL_CUSTOM_KEYS) {
-			if (!(key in this._viewConfigOverrides)) continue;
-			const value = this._viewConfigOverrides[key];
-			const existingPattern = new RegExp(`^${indent}${key}:\\s.*$`, 'm');
-			let line: string;
-			if (value === null || value === undefined) {
-				// Remove the key from the YAML
-				if (existingPattern.test(yaml)) {
-					yaml = yaml.replace(existingPattern, '');
-					changed = true;
-				}
-				continue;
-			}
-			if (typeof value === 'number') {
-				line = `${indent}${key}: ${value}`;
-			} else if (typeof value === 'boolean') {
-				line = `${indent}${key}: ${value}`;
-			} else if (typeof value === 'string') {
-				const quoted = "'" + value.replace(/'/g, "''") + "'";
-				line = `${indent}${key}: ${quoted}`;
-			} else {
-				continue;
-			}
-			if (existingPattern.test(yaml)) {
-				yaml = yaml.replace(existingPattern, line);
-			} else {
-				yaml = yaml.trimEnd() + '\n' + line + '\n';
-			}
-			changed = true;
-		}
-
-		// Re-quote any unquoted custom string keys already in the YAML
-		for (const key of CUSTOM_STRING_KEYS) {
-			if (key in this._viewConfigOverrides) continue;
-			const unquotedPattern = new RegExp(`^${indent}${key}: (?!')(.+)$`, 'm');
-			const match = unquotedPattern.exec(yaml);
-			if (match) {
-				const value = match[1].trim();
-				const quoted = "'" + value.replace(/'/g, "''") + "'";
-				const line = `${indent}${key}: ${quoted}`;
-				yaml = yaml.replace(unquotedPattern, line);
-				changed = true;
-			}
-		}
-
-		if (changed) {
-			// Write directly to the vault file — bypass Bases' save pipeline
-			// to avoid triggering a view recreation
-			const abstractFile = this.app.vault.getAbstractFileByPath(file.path);
-			if (abstractFile) {
-				await this.app.vault.modify(abstractFile as any, yaml);
-			}
-		}
+		const abstractFile = this.app.vault.getAbstractFileByPath(file.path);
+		if (!abstractFile) return;
+		await this.app.vault.modify(abstractFile as any, yaml);
 	}
 
-	/** After Bases saves its declared options, ensure custom string keys
-	 *  are properly YAML-quoted in the .base file.  Handles two cases:
-	 *  1. Keys set in the current session (in _viewConfigOverrides) — inject
-	 *     or update them.
-	 *  2. Keys already in the YAML but unquoted (Bases' serializer doesn't
-	 *     quote our pipe/semicolon values) — re-quote them to prevent
-	 *     parse errors on next load. */
+	/** After Bases saves its declared options, inject session overrides and
+	 *  re-quote any CUSTOM_STRING_KEYS that Bases' serializer wrote unquoted.
+	 *  Writes via setViewData + requestSave so Bases' save pipeline owns the
+	 *  final round-trip. */
 	private _persistCustomKeys(hostView: { getViewData?: () => string; setViewData?: (data: string, clear: boolean) => void; requestSave?: () => Promise<void> | void } | undefined): void {
 		const getViewData = hostView?.getViewData;
 		const setViewData = hostView?.setViewData;
 		if (typeof getViewData !== 'function' || typeof setViewData !== 'function') return;
 
-		let yaml = getViewData.call(hostView);
-		const indent = '    '; // .base view entries are indented 4 spaces
-		let changed = false;
+		const { yaml, changed } = applyCustomKeysToYaml(
+			getViewData.call(hostView),
+			this._collectCustomOverrides(),
+		);
+		if (!changed) return;
 
-		// 1) Inject/update keys from the current session's overrides
-		const overrides: Record<string, unknown> = {};
-		for (const key of ALL_CUSTOM_KEYS) {
-			if (key in this._viewConfigOverrides) overrides[key] = this._viewConfigOverrides[key];
-		}
-
-		for (const [key, value] of Object.entries(overrides)) {
-			const existingPattern = new RegExp(`^${indent}${key}:\\s.*$`, 'm');
-			let line: string;
-			if (value === null || value === undefined) {
-				// Remove the key from the YAML
-				if (existingPattern.test(yaml)) {
-					yaml = yaml.replace(existingPattern, '');
-					changed = true;
-				}
-				continue;
-			}
-			if (typeof value === 'number') {
-				// Plain numeric scalar — no quoting needed in YAML
-				line = `${indent}${key}: ${value}`;
-			} else if (typeof value === 'boolean') {
-				line = `${indent}${key}: ${value}`;
-			} else if (typeof value === 'string') {
-				// Single-quote the value for safe YAML output
-				const quoted = "'" + value.replace(/'/g, "''") + "'";
-				line = `${indent}${key}: ${quoted}`;
-			} else {
-				continue;
-			}
-			if (existingPattern.test(yaml)) {
-				yaml = yaml.replace(existingPattern, line);
-			} else {
-				yaml = yaml.trimEnd() + '\n' + line + '\n';
-			}
-			changed = true;
-		}
-
-		// 2) Re-quote any custom string keys that exist in the YAML but aren't
-		//    properly single-quoted (Bases' serializer writes them unquoted)
-		for (const key of CUSTOM_STRING_KEYS) {
-			// Skip keys we already handled in step 1
-			if (key in overrides) continue;
-			// Match: "    colorMap: <value>" where value does NOT start with '
-			const unquotedPattern = new RegExp(
-				`^${indent}${key}: (?!')(.+)$`, 'm'
-			);
-			const match = unquotedPattern.exec(yaml);
-			if (match) {
-				const value = match[1].trim();
-				const quoted = "'" + value.replace(/'/g, "''") + "'";
-				const line = `${indent}${key}: ${quoted}`;
-				yaml = yaml.replace(unquotedPattern, line);
-				changed = true;
-			}
-		}
-
-		if (changed) {
-			setViewData.call(hostView, yaml, true);
-			const requestSave = hostView?.requestSave;
-			if (typeof requestSave === 'function') {
-				void Promise.resolve(requestSave.call(hostView));
-			}
+		setViewData.call(hostView, yaml, true);
+		const requestSave = hostView?.requestSave;
+		if (typeof requestSave === 'function') {
+			void Promise.resolve(requestSave.call(hostView));
 		}
 	}
 
-	// ── String-encoding for object maps persisted in .base files ──────────
-	// Bases cannot round-trip object-type config values — it mangles them on
-	// save/reload.  We encode maps as semicolon-delimited strings with equals
-	// as the key/value separator, because colons (`:`) and pipes (`|`) are
-	// YAML-special and break the .base file parser when unquoted.
-	//
-	// Format:  "key1=value1;key2=value2;..."
-	// Example: "High=#e03131;Medium=#f59f00;Low=#2f9e44"
-
-	/** Encode a Record<string, string> as a semicolon-delimited string for persistence.
-	 *  Uses `=` as key/value separator and `;` as pair separator — both are
-	 *  YAML-safe unquoted characters, unlike `:` and `|`. */
-	private encodeMap(map: Record<string, string>): string {
-		return encodeStyleMap(map);
-	}
-
-	private decodeMap(encoded: string): Record<string, string> {
-		return decodeStyleMap(encoded);
-	}
+	// String-encoding for object maps persisted in .base files uses `=` / `;`
+	// as separators because `:` and `|` are YAML-special; see timeline-style-config.
 
 	private getStyleMapFromConfig(key: string): Record<string, string> {
 		const raw = this.getViewConfigValue(key);
-		if (typeof raw === 'string') return this.decodeMap(raw);
+		if (typeof raw === 'string') return decodeStyleMap(raw);
 		// Legacy: in-memory object from current session before reload
 		if (raw && typeof raw === 'object') return { ...(raw as Record<string, string>) };
 		return {};
@@ -744,7 +628,7 @@ export class TimelineView extends BasesView {
 
 		// Time scale selector
 		const scaleEl = leftEl.createDiv({ cls: 'bases-timeline-scale-selector' });
-		const scaleLabel = scaleEl.createDiv({ cls: 'bases-timeline-scale-label', text: 'Scale:' });
+		scaleEl.createDiv({ cls: 'bases-timeline-scale-label', text: 'Scale:' });
 		const scaleButtons = scaleEl.createDiv({ cls: 'bases-timeline-scale-buttons' });
 		(['day', 'week', 'month', 'quarter', 'year'] as const).forEach(scale => {
 			const btn = scaleButtons.createEl('button', { cls: 'bases-timeline-scale-btn', text: scale.charAt(0).toUpperCase() + scale.slice(1) });
@@ -899,7 +783,7 @@ export class TimelineView extends BasesView {
 		const allUniqueValues = this.getUniqueStyleValues(spec.selectedProp);
 		const { styleMap, changed } = getCompleteStyleMap(spec.selectedMap, allUniqueValues, PALETTE);
 		if (changed) {
-			this.setViewConfigValue(spec.mapKey, this.encodeMap(styleMap), true);
+			this.setViewConfigValue(spec.mapKey, encodeStyleMap(styleMap), true);
 			spec.selectedMap = styleMap;
 		}
 
@@ -929,7 +813,7 @@ export class TimelineView extends BasesView {
 				swatch.addEventListener('click', (e) => {
 					e.stopPropagation();
 					spec.selectedMap[value] = color;
-					this.setViewConfigValue(spec.mapKey, this.encodeMap(spec.selectedMap), true);
+					this.setViewConfigValue(spec.mapKey, encodeStyleMap(spec.selectedMap), true);
 					spec.applyToBars(value, color);
 					paletteEl.querySelectorAll('.bases-timeline-swatch').forEach(s => s.removeClass('is-selected'));
 					swatch.addClass('is-selected');
@@ -1050,33 +934,24 @@ export class TimelineView extends BasesView {
 			// All entry processing + row rendering is deferred async to keep the UI responsive.
 			const min = new Date(rangeStartMs as number);
 			min.setHours(0, 0, 0, 0);
-			const max = new Date(min.getTime() + (rangePresetDays as number) * 24 * 60 * 60 * 1000);
+			// rangePresetDays is inclusive: a 7-day preset spans days 0..6, so the
+			// window ends at (rangePresetDays - 1) days after min, at end-of-day.
+			const max = addCalendarDays(min, (rangePresetDays as number) - 1);
 			max.setHours(23, 59, 59, 999);
 			this._rangeMin = min; this._rangeMax = max;
 
 			// Render canvas structure synchronously — visible immediately
 			const scrollerEl = this.bodyEl.createDiv({ cls: 'bases-timeline-scroller' });
 			this._scrollerEl = scrollerEl;
-			this.bindScrollOverlaySync(scrollerEl, config.frozenWidth);
+			this.bindScrollOverlaySync(scrollerEl);
 			const canvasEl = scrollerEl.createDiv({ cls: 'bases-timeline-canvas' });
-			const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
-			const zoom = Math.max(config.zoom, 1);
-			if (config.timeScale === 'day') {
-				const dayPx = Math.min(30, 44 * zoom);
-				canvasEl.style.width = `${config.frozenWidth + Math.max(10, ticks.length) * dayPx}px`;
-			} else if (config.timeScale === 'week') {
-				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
-			} else if (config.timeScale === 'month') {
-				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 55 * zoom)}px`;
-			} else if (config.timeScale === 'quarter') {
-				const qPx = Math.min(200, 120 * zoom);
-				canvasEl.style.width = `${config.frozenWidth + Math.max(4, ticks.length) * qPx}px`;
-			} else if (config.timeScale === 'year') {
-				const yPx = Math.min(150, 90 * zoom);
-				canvasEl.style.width = `${config.frozenWidth + Math.max(3, ticks.length) * yPx}px`;
-			} else {
-				canvasEl.style.width = `calc(${config.frozenWidth}px + ${zoom * this.getScaleZoomFactor(config.timeScale) * 100}%)`;
-			}
+			const ticks = getTicksForScale(min, max, config.timeScale, config.weekStart);
+			canvasEl.style.width = getTimelineCanvasWidth({
+				frozenWidth: config.frozenWidth,
+				tickCount: ticks.length,
+				timeScale: config.timeScale,
+				zoom: config.zoom,
+			});
 			this.renderTimeAxis(canvasEl, min, max, config, ticks);
 			this.cacheDayLabelGeometry(canvasEl);
 			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.frozenWidth);
@@ -1125,7 +1000,7 @@ export class TimelineView extends BasesView {
 						// Skip entries outside the render window
 						if (dates && (dates.end < min || dates.start > max)) continue;
 
-						this.renderRow(canvasEl, entry, config, min, max, rowIndex % 2 === 0, ticks, entryDatesCache);
+						this.renderRow(canvasEl, entry, config, min, max, rowIndex % 2 === 0, entryDatesCache);
 						rowIndex++;
 					}
 
@@ -1152,8 +1027,8 @@ export class TimelineView extends BasesView {
 				this.bodyEl.createDiv({ cls: 'bases-timeline-empty', text: 'No tasks match the current filtered view.' });
 				return;
 			}
-			let min = this.snapStartToScale(minDate, config.timeScale, config.weekStart);
-			let max = this.snapEndToScale(maxDate, config.timeScale, config.weekStart);
+			let min = snapStartToScale(minDate, config.timeScale, config.weekStart);
+			let max = snapEndToScale(maxDate, config.timeScale, config.weekStart);
 			const dayMs = 24 * 60 * 60 * 1000;
 			const weekMs = 7 * dayMs;
 			if (config.timeScale === 'day') {
@@ -1173,7 +1048,7 @@ export class TimelineView extends BasesView {
 				const quarterMs = 3 * 30.5 * dayMs;
 				if (spanMs < 4 * quarterMs) {
 					max = new Date(min.getTime() + 4 * quarterMs);
-					max = this.snapEndToScale(max, 'quarter');
+					max = snapEndToScale(max, 'quarter');
 				}
 			} else if (config.timeScale === 'year') {
 				// Ensure at least 3 years visible
@@ -1181,7 +1056,7 @@ export class TimelineView extends BasesView {
 				const yearMs = 365 * dayMs;
 				if (spanMs < 3 * yearMs) {
 					max = new Date(min.getTime() + 3 * yearMs);
-					max = this.snapEndToScale(max, 'year');
+					max = snapEndToScale(max, 'year');
 				}
 			} else {
 				max = new Date(max.getTime() + weekMs);
@@ -1190,27 +1065,15 @@ export class TimelineView extends BasesView {
 			this._rangeMin = min; this._rangeMax = max;
 			const scrollerEl = this.bodyEl.createDiv({ cls: 'bases-timeline-scroller' });
 			this._scrollerEl = scrollerEl;
-			this.bindScrollOverlaySync(scrollerEl, config.frozenWidth);
+			this.bindScrollOverlaySync(scrollerEl);
 			const canvasEl = scrollerEl.createDiv({ cls: 'bases-timeline-canvas' });
-			const ticks = this.getTicksForScale(min, max, config.timeScale, config.weekStart);
-			const zoom = Math.max(config.zoom, 1);
-			const scaleZoom = this.getScaleZoomFactor(config.timeScale);
-			if (config.timeScale === 'day') {
-				const dayPx = Math.min(30, 44 * zoom);
-				canvasEl.style.width = `${config.frozenWidth + Math.max(10, ticks.length) * dayPx}px`;
-			} else if (config.timeScale === 'week') {
-				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 60 * zoom)}px`;
-			} else if (config.timeScale === 'month') {
-				canvasEl.style.width = `${config.frozenWidth + Math.max(900, ticks.length * 55 * zoom)}px`;
-			} else if (config.timeScale === 'quarter') {
-				const qPx = Math.min(200, 120 * zoom);
-				canvasEl.style.width = `${config.frozenWidth + Math.max(4, ticks.length) * qPx}px`;
-			} else if (config.timeScale === 'year') {
-				const yPx = Math.min(150, 90 * zoom);
-				canvasEl.style.width = `${config.frozenWidth + Math.max(3, ticks.length) * yPx}px`;
-			} else {
-				canvasEl.style.width = `calc(${config.frozenWidth}px + ${zoom * scaleZoom * 100}%)`;
-			}
+			const ticks = getTicksForScale(min, max, config.timeScale, config.weekStart);
+			canvasEl.style.width = getTimelineCanvasWidth({
+				frozenWidth: config.frozenWidth,
+				tickCount: ticks.length,
+				timeScale: config.timeScale,
+				zoom: config.zoom,
+			});
 			this.renderTimeAxis(canvasEl, min, max, config, ticks);
 			this.cacheDayLabelGeometry(canvasEl);
 			this.renderGridLines(canvasEl, ticks, min, max, config.timeScale, config.weekStart, config.frozenWidth);
@@ -1219,26 +1082,26 @@ export class TimelineView extends BasesView {
 			this.attachRowClickHandler(canvasEl);
 
 			for (const group of groups) {
-				this.renderGroup(canvasEl, group, config, min, max, ticks, entryDatesCache, groups.length);
+				this.renderGroup(canvasEl, group, config, min, max, entryDatesCache, groups.length);
 			}
 
 			this.applyCollapsedStateToRenderedGroups(config.collapsedGroups, config.groupByProp);
 		}
 	}
 
-	private bindScrollOverlaySync(scrollerEl: HTMLElement, frozenWidth: number): void {
+	private bindScrollOverlaySync(scrollerEl: HTMLElement): void {
 		const sync = () => {
 			if (this._scrollSyncRaf) cancelAnimationFrame(this._scrollSyncRaf);
 			this._scrollSyncRaf = requestAnimationFrame(() => {
 				this._scrollSyncRaf = 0;
-				this.syncOverlayClip(scrollerEl, frozenWidth);
+				this.syncOverlayClip(scrollerEl);
 			});
 		};
 		scrollerEl.addEventListener('scroll', sync, { passive: true });
 		sync();
 	}
 
-	private syncOverlayClip(scrollerEl: HTMLElement, frozenWidth: number): void {
+	private syncOverlayClip(scrollerEl: HTMLElement): void {
 		const scrollLeft = `${scrollerEl.scrollLeft}px`;
 		this.containerEl.style.setProperty('--timeline-scroll-left', scrollLeft);
 	}
@@ -1267,7 +1130,7 @@ export class TimelineView extends BasesView {
 		entry: BasesEntry,
 		startPropName: string | null,
 		endPropName: string | null,
-		min: Date,
+		_min: Date,
 		max: Date,
 		config: TimelineConfig
 	): { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null {
@@ -1305,27 +1168,6 @@ export class TimelineView extends BasesView {
 		// Fall back to authoritative Bases API
 		return this.getEntryDates(entry, config.startDateProp!, config.endDateProp!);
 	}
-
-
-
-	private centerOnDateHorizontal(scrollerEl: HTMLElement, canvasEl: HTMLElement, min: Date, max: Date, date: Date): void {
-		const d = new Date(date);
-		d.setHours(0, 0, 0, 0);
-		if (d < min || d > max) return;
-
-		const total = max.getTime() - min.getTime();
-		if (total <= 0) return;
-		const ratio = (d.getTime() - min.getTime()) / total;
-
-		requestAnimationFrame(() => {
-			const timelineWidth = canvasEl.scrollWidth;
-			const x = ratio * timelineWidth;
-			const target = x - scrollerEl.clientWidth * 0.5;
-			const maxScroll = Math.max(0, scrollerEl.scrollWidth - scrollerEl.clientWidth);
-			scrollerEl.scrollLeft = Math.max(0, Math.min(maxScroll, target));
-		});
-	}
-
 	private renderTodayMarker(containerEl: HTMLElement, min: Date, max: Date, showLabel: boolean, frozenWidth = LABEL_COLUMN_WIDTH_PX): void {
 		const today = new Date();
 		today.setHours(0, 0, 0, 0);
@@ -1381,7 +1223,7 @@ export class TimelineView extends BasesView {
 		const primaryHeaderEl = spacerEl.createDiv({
 			cls: 'bases-timeline-notes-header',
 		});
-		this.setupColumnHeader(primaryHeaderEl, config.primaryProp, config, true);
+		this.setupColumnHeader(primaryHeaderEl, config.primaryProp, true);
 		this.attachResizeHandle(primaryHeaderEl, config);
 		for (const prop of config.extraProps) {
 			const key = JSON.stringify(prop);
@@ -1391,7 +1233,7 @@ export class TimelineView extends BasesView {
 			});
 			headerCell.style.width = `${w}px`;
 			headerCell.style.minWidth = `${w}px`;
-			this.setupColumnHeader(headerCell, prop, config, false);
+			this.setupColumnHeader(headerCell, prop, false);
 			this.attachPropColResizeHandle(headerCell, prop, config);
 		}
 
@@ -1405,9 +1247,9 @@ export class TimelineView extends BasesView {
 		labelsEl.setAttribute('data-scale', config.timeScale);
 		labelsEl.addClass('has-context');
 
-		const resolvedTicks = ticks ?? this.getTicksForScale(min, max, config.timeScale, config.weekStart);
-		const visibleTicks = this.reduceTicks(resolvedTicks, config.timeScale);
-		const formatter = this.getAxisFormatter(min, max, config.timeScale);
+		const resolvedTicks = ticks ?? getTicksForScale(min, max, config.timeScale, config.weekStart);
+		const visibleTicks = reduceTicks(resolvedTicks, config.timeScale);
+		const formatter = getAxisFormatter(min, max, config.timeScale);
 
 		if (config.timeScale === 'day') {
 			this.renderDayLabels(labelsEl, resolvedTicks, min, max, config.weekStart);
@@ -1425,7 +1267,7 @@ export class TimelineView extends BasesView {
 			const offset = date.getTime() - min.getTime();
 			const ratio = total === 0 ? 0 : offset / total;
 			if (ratio >= -0.01 && ratio <= 1.01) {
-				const label = this.formatTickLabel(date, config.timeScale, formatter);
+				const label = formatTickLabel(date, config.timeScale, formatter);
 				const tickEl = labelsEl.createDiv({ cls: 'bases-timeline-axis-label', text: label });
 				tickEl.addClass(`is-${config.timeScale}-label`);
 				tickEl.style.left = `${ratio * 100}%`;
@@ -1609,54 +1451,6 @@ export class TimelineView extends BasesView {
 		}
 	}
 
-	private getTicksForScale(min: Date, max: Date, scale: string, weekStart: 'monday' | 'sunday' = 'monday'): Date[] {
-		const ticks: Date[] = [];
-		const current = new Date(min);
-
-		if (scale === 'day') {
-			current.setHours(0, 0, 0, 0);
-			while (current <= max) {
-				ticks.push(new Date(current));
-				current.setDate(current.getDate() + 1);
-			}
-		} else if (scale === 'week') {
-			const first = new Date(current);
-			const day = current.getDay();
-			const shift = weekStart === 'sunday' ? day : (day === 0 ? 6 : day - 1);
-			first.setDate(current.getDate() - shift);
-			first.setHours(0, 0, 0, 0);
-			while (first <= max) {
-				ticks.push(new Date(first));
-				first.setDate(first.getDate() + 7);
-			}
-		} else if (scale === 'month') {
-			current.setDate(1);
-			current.setHours(0, 0, 0, 0);
-			while (current <= max) {
-				ticks.push(new Date(current));
-				current.setMonth(current.getMonth() + 1);
-			}
-		} else if (scale === 'quarter') {
-			const q = Math.floor(current.getMonth() / 3);
-			current.setMonth(q * 3);
-			current.setDate(1);
-			current.setHours(0, 0, 0, 0);
-			while (current <= max) {
-				ticks.push(new Date(current));
-				current.setMonth(current.getMonth() + 3);
-			}
-		} else if (scale === 'year') {
-			current.setMonth(0, 1);
-			current.setHours(0, 0, 0, 0);
-			while (current <= max) {
-				ticks.push(new Date(current));
-				current.setFullYear(current.getFullYear() + 1);
-			}
-		}
-
-		return ticks.length > 0 ? ticks : [new Date(min)];
-	}
-
 	private renderDayLabels(labelsEl: HTMLElement, dayTicks: Date[], min: Date, max: Date, weekStart: 'monday' | 'sunday'): void {
 		labelsEl.addClass('is-day-scale');
 		const total = max.getTime() - min.getTime();
@@ -1679,7 +1473,7 @@ export class TimelineView extends BasesView {
 			dayEl.style.left = `${leftRatio * 100}%`;
 			dayEl.style.width = `${Math.max(0, widthRatio * 100)}%`;
 			dayEl.setAttribute('title', date.toLocaleDateString());
-			dayEl.setAttribute('data-date', this._fmtDate(date));
+			dayEl.setAttribute('data-date', formatCalendarDate(date));
 			this.populateAdaptiveDayLabel(dayEl, date, weekStart, slotWidthPx);
 		}
 	}
@@ -1776,9 +1570,9 @@ export class TimelineView extends BasesView {
 			const newWidth = Math.max(PROP_MIN, Math.min(PROP_MAX, startWidth + delta));
 			// Persist: read current saved widths, update this key, save back
 			const raw = this.getViewConfigValue('propColWidths');
-			const saved = (typeof raw === 'string' ? this.decodeMap(raw) : raw ?? {}) as Record<string, string>;
+			const saved = (typeof raw === 'string' ? decodeStyleMap(raw) : raw ?? {}) as Record<string, string>;
 			saved[key] = String(newWidth);
-			this.setViewConfigValue('propColWidths', this.encodeMap(saved), true);
+			this.setViewConfigValue('propColWidths', encodeStyleMap(saved), true);
 		};
 
 		handle.addEventListener('mousedown', (e: MouseEvent) => {
@@ -1792,7 +1586,7 @@ export class TimelineView extends BasesView {
 		});
 	}
 
-	private setupColumnHeader(headerEl: HTMLElement, prop: BasesPropertyId | null, config: TimelineConfig, isPrimary: boolean): void {
+	private setupColumnHeader(headerEl: HTMLElement, prop: BasesPropertyId | null, isPrimary: boolean): void {
 		headerEl.empty();
 		headerEl.addClass('bases-timeline-column-header');
 		if (isPrimary) headerEl.addClass('is-primary');
@@ -1992,7 +1786,6 @@ export class TimelineView extends BasesView {
 	}
 
 	private startInlinePropCellEdit(
-		propCell: HTMLElement,
 		valueSpan: HTMLElement,
 		editBtn: HTMLButtonElement | null,
 		entry: BasesEntry,
@@ -2073,7 +1866,6 @@ export class TimelineView extends BasesView {
 	}
 
 	private startInlineLabelEdit(
-		labelEl: HTMLElement,
 		labelSpan: HTMLElement,
 		editBtn: HTMLButtonElement | null,
 		entry: BasesEntry,
@@ -2116,75 +1908,6 @@ export class TimelineView extends BasesView {
 		});
 	}
 
-	private renderTrackGridLines(trackEl: HTMLElement, ticks: Date[], min: Date, max: Date, scale: string, weekStart: 'monday' | 'sunday'): void {
-		const total = max.getTime() - min.getTime();
-		if (total === 0) return;
-
-		// Weekend backgrounds (day scale)
-		if (scale === 'day') {
-			const current = new Date(min);
-			current.setHours(0, 0, 0, 0);
-			const oneDay = 1000 * 60 * 60 * 24;
-			while (current <= max) {
-				const dayOfWeek = current.getDay();
-				if (dayOfWeek === 0 || dayOfWeek === 6) {
-					const start = Math.max(min.getTime(), current.getTime());
-					const end = Math.min(max.getTime(), current.getTime() + oneDay);
-					if (end > start) {
-						const left = ((start - min.getTime()) / total) * 100;
-						const width = ((end - start) / total) * 100;
-						const bg = trackEl.createDiv({ cls: 'bases-timeline-weekend-bg' });
-						bg.style.left = `${left}%`;
-						bg.style.width = `${width}%`;
-					}
-				}
-				current.setDate(current.getDate() + 1);
-			}
-		}
-
-		// Grid lines
-		const weekBoundaryRatios: number[] = [];
-		const visibleTicks = scale === 'week' ? ticks : this.reduceTicks(ticks, scale);
-		visibleTicks.forEach(tick => {
-			const offset = tick.getTime() - min.getTime();
-			const left = (offset / total) * 100;
-			if (left < 0 || left > 100) return;
-
-			if (scale === 'week') return; // week uses overlay
-
-			const isYearBoundary = tick.getMonth() === 0 && tick.getDate() === 1;
-			const lineEl = trackEl.createDiv({ cls: 'bases-timeline-grid-line' });
-			lineEl.style.left = `${left}%`;
-			if (scale === 'day') {
-				lineEl.addClass('is-minor');
-				const isWeekStart = weekStart === 'sunday' ? tick.getDay() === 0 : tick.getDay() === 1;
-				if (isWeekStart) weekBoundaryRatios.push(left / 100);
-			} else if (isYearBoundary) {
-				lineEl.addClass('is-year-boundary');
-			} else {
-				lineEl.addClass('is-major');
-			}
-		});
-
-		// Week boundary bold lines (day scale)
-		for (const ratio of weekBoundaryRatios) {
-			const line = trackEl.createDiv({ cls: 'bases-timeline-grid-line is-week-boundary' });
-			line.style.left = `${ratio * 100}%`;
-		}
-
-		// Week grid lines (week scale) — also mark year boundaries
-		if (scale === 'week') {
-			for (const tick of ticks) {
-				const ratio = (tick.getTime() - min.getTime()) / total;
-				if (ratio < 0 || ratio > 1) continue;
-				const isYearBoundary = tick.getMonth() === 0 && tick.getDate() === 1;
-				const line = trackEl.createDiv({ cls: 'bases-timeline-grid-line' });
-				line.style.left = `${ratio * 100}%`;
-				line.addClass(isYearBoundary ? 'is-year-boundary' : 'is-major');
-			}
-		}
-	}
-
 	private renderGridLines(containerEl: HTMLElement, ticks: Date[], min: Date, max: Date, scale: string, weekStart: 'monday' | 'sunday', labelColWidth: number): void {
 		const gridEl = containerEl.createDiv({ cls: 'bases-timeline-grid' });
 		// Offset grid past the sticky label column
@@ -2217,7 +1940,7 @@ export class TimelineView extends BasesView {
 
 		// For non-day, non-week scales: render minor grid lines
 		if (scale !== 'day' && scale !== 'week') {
-			const minorTicks = this.getMinorGridTicks(min, max, scale, weekStart);
+			const minorTicks = getMinorGridTicks(min, max, scale, weekStart);
 			minorTicks.forEach(tick => {
 				const offset = tick.getTime() - min.getTime();
 				const left = total === 0 ? 0 : (offset / total) * 100;
@@ -2283,59 +2006,7 @@ export class TimelineView extends BasesView {
 		}
 	}
 
-	private getMinorGridTicks(min: Date, max: Date, scale: string, weekStart: 'monday' | 'sunday'): Date[] {
-		const ticks: Date[] = [];
-		const current = new Date(min);
-
-		if (scale === 'week') {
-			// Minor ticks: daily
-			current.setHours(0, 0, 0, 0);
-			while (current <= max) {
-				ticks.push(new Date(current));
-				current.setDate(current.getDate() + 1);
-			}
-		} else if (scale === 'month') {
-			// Minor ticks: weekly
-			const first = new Date(current);
-			const day = current.getDay();
-			const shift = weekStart === 'sunday' ? day : (day === 0 ? 6 : day - 1);
-			first.setDate(current.getDate() - shift);
-			first.setHours(0, 0, 0, 0);
-			while (first <= max) {
-				ticks.push(new Date(first));
-				first.setDate(first.getDate() + 7);
-			}
-		} else if (scale === 'quarter') {
-			// Minor ticks: monthly
-			current.setDate(1);
-			current.setHours(0, 0, 0, 0);
-			while (current <= max) {
-				ticks.push(new Date(current));
-				current.setMonth(current.getMonth() + 1);
-			}
-		} else if (scale === 'year') {
-			// Minor ticks: monthly
-			current.setDate(1);
-			current.setHours(0, 0, 0, 0);
-			while (current <= max) {
-				ticks.push(new Date(current));
-				current.setMonth(current.getMonth() + 1);
-			}
-		}
-
-		return ticks;
-	}
-
-	private reduceTicks(ticks: Date[], scale: string): Date[] {
-		// day, week, month, year: never reduce — always show every tick
-		if (scale === 'day' || scale === 'week' || scale === 'month' || scale === 'year') return ticks;
-		const maxVisible = 16;
-		if (ticks.length <= maxVisible) return ticks;
-		const step = Math.ceil(ticks.length / maxVisible);
-		return ticks.filter((_, i) => i % step === 0 || i === ticks.length - 1);
-	}
-
-	private renderGroup(containerEl: HTMLElement, group: RenderGroup, config: TimelineConfig, min: Date, max: Date, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null>, groupCount: number): void {
+	private renderGroup(containerEl: HTMLElement, group: RenderGroup, config: TimelineConfig, min: Date, max: Date, entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null>, groupCount: number): void {
 		const isGrouped = groupCount > 1 || group.hasKey;
 		const groupLabel = group.label;
 		const isCollapsed = this.isGroupCollapsed(groupLabel, config);
@@ -2371,7 +2042,7 @@ export class TimelineView extends BasesView {
 		group.entries.forEach((entry) => {
 			const dates = entryDatesCache.get(entry) ?? null;
 			if (dates && (dates.end < min || dates.start > max)) return;
-			this.renderRow(containerEl, entry, config, min, max, rowIndex % 2 === 0, ticks, entryDatesCache, isGrouped ? groupLabel : null);
+			this.renderRow(containerEl, entry, config, min, max, rowIndex % 2 === 0, entryDatesCache, isGrouped ? groupLabel : null);
 			rowIndex++;
 		});
 	}
@@ -2382,6 +2053,8 @@ export class TimelineView extends BasesView {
 			? String(config.groupByProp).replace(/^note\./, '')
 			: 'Group';
 		const groupHeaderEl = containerEl.createDiv({ cls: 'bases-timeline-group' });
+		// Persist collapse identity on the element so recovery does not depend on rendered text.
+		groupHeaderEl.setAttribute('data-collapse-key', this.getGroupCollapseKey(groupLabel, config));
 		if (isCollapsed) groupHeaderEl.addClass('is-collapsed');
 		const headingEl = groupHeaderEl.createDiv({ cls: 'bases-group-heading' });
 		const toggleEl = headingEl.createEl('button', {
@@ -2424,7 +2097,7 @@ export class TimelineView extends BasesView {
 			const key = this.getGroupCollapseKey(group.label, config);
 			if (collapsed) next[key] = true;
 		}
-		this.setViewConfigValue('collapsedGroups', this.encodeMap(next as unknown as Record<string, string>), true);
+		this.setViewConfigValue('collapsedGroups', encodeStyleMap(next as unknown as Record<string, string>), true);
 		config.collapsedGroups = next;
 		this.applyCollapsedStateToRenderedGroups(next, config.groupByProp);
 	}
@@ -2434,7 +2107,7 @@ export class TimelineView extends BasesView {
 		const key = this.getGroupCollapseKey(groupLabel, config);
 		if (next[key]) delete next[key];
 		else next[key] = true;
-		this.setViewConfigValue('collapsedGroups', this.encodeMap(next as unknown as Record<string, string>), true);
+		this.setViewConfigValue('collapsedGroups', encodeStyleMap(next as unknown as Record<string, string>), true);
 		config.collapsedGroups = next;
 		this.applyCollapsedStateToRenderedGroups(next, config.groupByProp);
 	}
@@ -2458,13 +2131,12 @@ export class TimelineView extends BasesView {
 		return previewEl;
 	}
 
-	private applyCollapsedStateToRenderedGroups(collapsedGroups: Record<string, boolean>, groupByProp: string | null): void {
-		const defaultProp = groupByProp ? String(groupByProp).replace(/^note\./, '') : '__group__';
+	private applyCollapsedStateToRenderedGroups(collapsedGroups: Record<string, boolean>, _groupByProp: string | null): void {
 		const groupHeaders = Array.from(this.bodyEl.querySelectorAll('.bases-timeline-group')) as HTMLElement[];
 		for (const groupHeaderEl of groupHeaders) {
-			const prop = groupHeaderEl.querySelector('.bases-group-property')?.textContent?.trim() || defaultProp;
-			const label = groupHeaderEl.querySelector('.bases-group-value')?.textContent?.trim() || 'Ungrouped';
-			const collapseKey = `${prop}::${label}`;
+			// Collapse key is stamped onto the element at render time — decoupled from header text.
+			const collapseKey = groupHeaderEl.getAttribute('data-collapse-key');
+			if (!collapseKey) continue;
 			this.setRenderedGroupCollapsed(groupHeaderEl, !!collapsedGroups[collapseKey]);
 		}
 	}
@@ -2485,7 +2157,7 @@ export class TimelineView extends BasesView {
 		}
 	}
 
-	private renderRow(containerEl: HTMLElement, entry: BasesEntry, config: TimelineConfig, min: Date, max: Date, isEven: boolean = false, ticks: Date[], entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null>, currentGroupLabel: string | null = null): void {
+	private renderRow(containerEl: HTMLElement, entry: BasesEntry, config: TimelineConfig, min: Date, max: Date, isEven: boolean = false, entryDatesCache: Map<BasesEntry, { start: Date; end: Date; isPoint: boolean; isInvalid?: boolean } | null>, currentGroupLabel: string | null = null): void {
 		const rowEl = containerEl.createDiv({ cls: 'bases-timeline-row' });
 		if (isEven) rowEl.addClass('is-even');
 		rowEl.setAttribute('data-entry-path', entry.file.path);
@@ -2599,13 +2271,13 @@ export class TimelineView extends BasesView {
 						attr: { max: '9999-12-31', placeholder: 'Empty' },
 					});
 					const parsedDate = this.parseDateValue(val) ?? this.parseRawFrontmatterDate(text);
-					dateInput.value = parsedDate ? this._fmtDate(parsedDate) : '';
+					dateInput.value = parsedDate ? formatCalendarDate(parsedDate) : '';
 					dateInput.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
 					dateInput.addEventListener('mousedown', (e: MouseEvent) => e.stopPropagation());
 
 					const saveDate = async () => {
 						const newVal = dateInput.value.trim();
-						const oldVal = parsedDate ? this._fmtDate(parsedDate) : '';
+						const oldVal = parsedDate ? formatCalendarDate(parsedDate) : '';
 						if (newVal === oldVal) return;
 						const file = this.app.vault.getFileByPath(entry.file.path);
 						if (file) {
@@ -2624,7 +2296,7 @@ export class TimelineView extends BasesView {
 							dateInput.blur();
 						}
 						if (ke.key === 'Escape') {
-							dateInput.value = parsedDate ? this._fmtDate(parsedDate) : '';
+							dateInput.value = parsedDate ? formatCalendarDate(parsedDate) : '';
 							dateInput.blur();
 						}
 					});
@@ -2646,7 +2318,7 @@ export class TimelineView extends BasesView {
 					const beginEdit = (e?: MouseEvent) => {
 						e?.stopPropagation(); e?.preventDefault();
 						if (propCell.querySelector('input.bases-timeline-prop-cell-input')) return;
-						this.startInlinePropCellEdit(propCell, valueSpan, null, entry, propKey, propType, text);
+						this.startInlinePropCellEdit(valueSpan, null, entry, propKey, propType, text);
 					};
 					propCell.addEventListener('click', (e: MouseEvent) => {
 						if ((e.target as HTMLElement | null)?.closest('button, input, a')) return;
@@ -2676,7 +2348,7 @@ export class TimelineView extends BasesView {
 			const beginLabelEdit = (e?: MouseEvent) => {
 				e?.stopPropagation(); e?.preventDefault();
 				if (labelEl.querySelector('input.bases-timeline-label-input')) return;
-				this.startInlineLabelEdit(labelEl, labelSpan, editBtn, entry, label, labelPropKey, isFileNameProp);
+				this.startInlineLabelEdit(labelSpan, editBtn, entry, label, labelPropKey, isFileNameProp);
 			};
 			editBtn?.addEventListener('click', beginLabelEdit);
 			if (labelPropKey && !isFileNameProp) {
@@ -2707,7 +2379,7 @@ export class TimelineView extends BasesView {
 					const rect     = trackEl.getBoundingClientRect();
 					const totalMs  = this._rangeMax.getTime() - this._rangeMin.getTime();
 					const pct      = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-					const anchorDate = this._localMidnight(new Date(this._rangeMin.getTime() + pct * totalMs));
+					const anchorDate = localMidnight(new Date(this._rangeMin.getTime() + pct * totalMs));
 					const ghostEl  = trackEl.createDiv({ cls: 'bases-timeline-draw-ghost' });
 					ghostEl.style.left  = `${pct * 100}%`;
 					ghostEl.style.width = '0%';
@@ -2909,73 +2581,7 @@ export class TimelineView extends BasesView {
 		}
 	}
 
-	/** Show a floating date picker popover anchored to a prop cell, normalized to a calendar date. */
-	private _showPropDatePicker(
-		anchor: HTMLElement,
-		filePath: string,
-		propKey: string,
-		propType: string,
-		currentValue: string,
-		onSave: (newVal: string) => void,
-	): void {
-		// Remove any existing prop date picker
-		document.getElementById('tl-prop-date-popover')?.remove();
-
-		const isDatetime = propType === 'datetime';
-		const popover = document.body.createDiv({ attr: { id: 'tl-prop-date-popover' }, cls: 'bases-timeline-jump-popover tl-prop-date-popover' });
-		const rect = anchor.getBoundingClientRect();
-		popover.style.top = `${rect.bottom + 4}px`;
-		popover.style.left = `${rect.left}px`;
-
-		const input = popover.createEl('input', { type: 'date' });
-		// Timeline semantics are day-based, so datetime values are reduced to their calendar date.
-		if (currentValue) {
-			try {
-				const d = this.parseRawFrontmatterDate(currentValue);
-				if (d) {
-					input.value = this._fmtDate(d);
-				} else {
-					input.value = currentValue;
-				}
-			} catch { input.value = currentValue; }
-		}
-
-		const save = async () => {
-			const raw = input.value;
-			const file = this.app.vault.getFileByPath(filePath);
-			if (!raw) {
-				// Empty = user cleared the date
-				if (file) {
-					await this.app.fileManager.processFrontMatter(file, fm => { delete fm[propKey]; });
-					onSave('');
-				}
-				popover.remove();
-				return;
-			}
-			if (file) {
-				await this.app.fileManager.processFrontMatter(file, fm => { fm[propKey] = raw; });
-				onSave(raw);
-			}
-			popover.remove();
-		};
-
-		// Auto-save on date change, close on Escape
-		input.addEventListener('change', () => { void save(); });
-		input.addEventListener('keydown', (e: KeyboardEvent) => {
-			if (e.key === 'Escape') { popover.remove(); }
-		});
-
-		const dismiss = (e: MouseEvent) => {
-			if (!popover.contains(e.target as Node)) {
-				popover.remove();
-				document.removeEventListener('mousedown', dismiss);
-			}
-		};
-		setTimeout(() => document.addEventListener('mousedown', dismiss), 0);
-		input.focus();
-	}
-
-	private _showJumpToDate(anchor: HTMLElement, evt: MouseEvent): void {
+	private _showJumpToDate(anchor: HTMLElement, _evt: MouseEvent): void {
 		const existing = document.getElementById('tl-jump-popover');
 		if (existing) { existing.remove(); return; }
 
@@ -2985,7 +2591,7 @@ export class TimelineView extends BasesView {
 		popover.style.left = `${rect.left}px`;
 
 		const input = popover.createEl('input', { type: 'date' });
-		input.value = this._fmtDate(new Date());
+		input.value = formatCalendarDate(new Date());
 
 		const go = popover.createEl('button', { cls: 'mod-cta', text: 'Go' });
 		go.addEventListener('click', () => {
@@ -3034,7 +2640,6 @@ export class TimelineView extends BasesView {
 
 		try {
 			await this.app.fileManager.processFrontMatter(file, (fmData) => {
-				delete fmData[`note.${groupByProp!}`];
 				if (toGroupValue === 'Ungrouped') {
 					delete fmData[groupByProp!]; // remove property entirely → note becomes ungrouped
 				} else {
@@ -3055,7 +2660,6 @@ export class TimelineView extends BasesView {
 			const scroller = el.querySelector('.bases-timeline-scroller') as HTMLElement | null;
 			const saved: Array<{ el: HTMLElement; props: Record<string, string> }> = [];
 			if (scroller) {
-				const cs = getComputedStyle(scroller);
 				const overrides: Record<string, string> = {
 					overflow: 'visible',
 					overflowX: 'visible',
@@ -3163,8 +2767,8 @@ export class TimelineView extends BasesView {
 			.setTitle('Clear dates')
 			.setIcon('calendar-x')
 			.onClick(async () => {
-				const oldStart = this._fmtDate(currentStart);
-				const oldEnd   = this._fmtDate(currentEnd);
+				const oldStart = formatCalendarDate(currentStart);
+				const oldEnd   = formatCalendarDate(currentEnd);
 				this._pushUndo([{
 					path: entry.file.path, startKey, endKey,
 					before: { start: oldStart, end: oldEnd },
@@ -3207,12 +2811,12 @@ export class TimelineView extends BasesView {
 
 		pop.createEl('label', { text: 'Start', cls: 'tl-pop-label' });
 		const startInput = pop.createEl('input', { type: 'date' });
-		startInput.value = this._fmtDate(currentStart);
+		startInput.value = formatCalendarDate(currentStart);
 		if (!startWritable) { startInput.disabled = true; startInput.title = 'Set by a formula — cannot be edited here'; }
 
 		pop.createEl('label', { text: 'End', cls: 'tl-pop-label' });
 		const endInput = pop.createEl('input', { type: 'date' });
-		endInput.value = this._fmtDate(currentEnd);
+		endInput.value = formatCalendarDate(currentEnd);
 		if (!endWritable) { endInput.disabled = true; endInput.title = 'Set by a formula — cannot be edited here'; }
 
 		const save = pop.createEl('button', { cls: 'mod-cta', text: 'Save' });
@@ -3221,7 +2825,7 @@ export class TimelineView extends BasesView {
 			const newStart = startInput.value;
 			const newEnd   = endInput.value;
 			if (!newStart || !newEnd) return;
-			const before = { start: this._fmtDate(currentStart), end: this._fmtDate(currentEnd) };
+			const before = { start: formatCalendarDate(currentStart), end: formatCalendarDate(currentEnd) };
 			const file = this.app.vault.getFileByPath(entry.file.path);
 			if (!file) return;
 			await this.app.fileManager.processFrontMatter(file, fm => {
@@ -3310,10 +2914,6 @@ export class TimelineView extends BasesView {
 
 	// ─── Drag & resize ───────────────────────────────────────────────────────
 
-	private _localMidnight(d: Date): Date { return localMidnight(d); }
-	private _addCalendarDays(d: Date, days: number): Date { return addCalendarDays(d, days); }
-	private _fmtDate(d: Date): string { return formatCalendarDate(d); }
-
 	private _getRenderedDayStepPx(trackEl: HTMLElement): number | null {
 		if (this._dayLabelSlots.length === 0) {
 			const canvas = trackEl.closest('.bases-timeline-canvas');
@@ -3338,8 +2938,6 @@ export class TimelineView extends BasesView {
 		return null;
 	}
 
-	private _diffCalendarDays(start: Date, end: Date): number { return diffCalendarDays(start, end); }
-
 	private _startDrag(
 		type: DragState['type'],
 		barEl: HTMLElement,
@@ -3355,12 +2953,12 @@ export class TimelineView extends BasesView {
 		const trackEl = barEl.parentElement!;
 		const trackRect = trackEl.getBoundingClientRect();
 		const barRect = barEl.getBoundingClientRect();
-		const lmStart = this._localMidnight(origStart);
-		const lmEnd   = this._localMidnight(origEnd);
+		const lmStart = localMidnight(origStart);
+		const lmEnd   = localMidnight(origEnd);
 		const mouseAnchorDate = this._lastConfig?.timeScale === 'day' ? this._getRenderedDayDateAtClientX(trackEl, mouseX) : null;
-		const spanDays = this._diffCalendarDays(lmStart, lmEnd);
+		const spanDays = diffCalendarDays(lmStart, lmEnd);
 		const mouseAnchorOffsetDays = mouseAnchorDate
-			? Math.max(0, Math.min(spanDays, this._diffCalendarDays(lmStart, mouseAnchorDate)))
+			? Math.max(0, Math.min(spanDays, diffCalendarDays(lmStart, mouseAnchorDate)))
 			: 0;
 		this._dragState = {
 			type, barEl, entryPath, startPropKey, endPropKey,
@@ -3407,11 +3005,11 @@ export class TimelineView extends BasesView {
 			const d     = this._draw;
 			const rect  = d.trackEl.getBoundingClientRect();
 			const pct   = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-			const curDate = this._localMidnight(new Date(d.rangeMin.getTime() + pct * d.totalMs));
+			const curDate = localMidnight(new Date(d.rangeMin.getTime() + pct * d.totalMs));
 			const start = curDate < d.anchorDate ? curDate : d.anchorDate;
 			const end   = curDate < d.anchorDate ? d.anchorDate : curDate;
 			const startPct = ((start.getTime() - d.rangeMin.getTime()) / d.totalMs) * 100;
-			const endPct   = ((this._addCalendarDays(end, 1).getTime() - d.rangeMin.getTime()) / d.totalMs) * 100;
+			const endPct   = ((addCalendarDays(end, 1).getTime() - d.rangeMin.getTime()) / d.totalMs) * 100;
 			d.ghostEl.style.left  = `${startPct}%`;
 			d.ghostEl.style.width = `${Math.max(endPct - startPct, 0.5)}%`;
 			return;
@@ -3430,7 +3028,7 @@ export class TimelineView extends BasesView {
 			? this._getRenderedDayDateAtClientX(trackEl, trackRect.left + s.barEndPx + deltaPx - 1)
 			: null;
 		const deltaDays = s.mouseAnchorDate && currentMouseDate
-			? this._diffCalendarDays(s.mouseAnchorDate, currentMouseDate)
+			? diffCalendarDays(s.mouseAnchorDate, currentMouseDate)
 			: s.dayStepPx
 				? Math.round(deltaPx / s.dayStepPx)
 				: Math.round((deltaPx / s.trackWidth) * (s.totalMs / 86400000));
@@ -3462,7 +3060,7 @@ export class TimelineView extends BasesView {
 				deltaDays,
 				minWidthDays,
 			}));
-			const excl = this._addCalendarDays(newEnd, 1);
+			const excl = addCalendarDays(newEnd, 1);
 			const widthMs = Math.max(minWidthDays * dayMs, excl.getTime() - newStart.getTime());
 			s.barEl.style.width = `${(widthMs / s.totalMs) * 100}%`;
 			// left unchanged
@@ -3477,7 +3075,7 @@ export class TimelineView extends BasesView {
 				minWidthDays,
 			}));
 			const leftPct = ((newStart.getTime() - s.rangeMin.getTime()) / s.totalMs) * 100;
-			const excl = this._addCalendarDays(newEnd, 1);
+			const excl = addCalendarDays(newEnd, 1);
 			const widthMs = Math.max(minWidthDays * dayMs, excl.getTime() - newStart.getTime());
 			s.barEl.style.left  = `${leftPct}%`;
 			s.barEl.style.width = `${(widthMs / s.totalMs) * 100}%`;
@@ -3503,13 +3101,13 @@ export class TimelineView extends BasesView {
 			this._draw = null;
 			const rect = d.trackEl.getBoundingClientRect();
 			const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-			const curDate = this._localMidnight(new Date(d.rangeMin.getTime() + pct * d.totalMs));
+			const curDate = localMidnight(new Date(d.rangeMin.getTime() + pct * d.totalMs));
 			const start = curDate < d.anchorDate ? curDate : d.anchorDate;
 			const end   = curDate < d.anchorDate ? d.anchorDate : curDate;
 			d.ghostEl.remove();
 
-			const startStr = this._fmtDate(start);
-			const endStr   = this._fmtDate(end);
+			const startStr = formatCalendarDate(start);
+			const endStr   = formatCalendarDate(end);
 
 			const file = this.app.vault.getFileByPath(d.entryPath);
 			if (file) {
@@ -3538,7 +3136,7 @@ export class TimelineView extends BasesView {
 		// Use pendingStart/End tracked during drag — do NOT reconstruct from CSS
 		const newStart = s.pendingStart;
 		const newEnd   = s.pendingEnd;
-		const deltaDays = this._diffCalendarDays(s.origStart, newStart);
+		const deltaDays = diffCalendarDays(s.origStart, newStart);
 
 		// Build list of bars to update: the dragged bar + any other selected bars (move only)
 		const toUpdate: UndoRecord['entries'] = [];
@@ -3546,8 +3144,8 @@ export class TimelineView extends BasesView {
 		// Primary bar
 		const primaryFile = this.app.vault.getFileByPath(s.entryPath);
 		if (primaryFile) {
-			const before = { start: this._fmtDate(s.origStart), end: this._fmtDate(s.origEnd) };
-			const after  = { start: this._fmtDate(newStart),    end: this._fmtDate(newEnd) };
+			const before = { start: formatCalendarDate(s.origStart), end: formatCalendarDate(s.origEnd) };
+			const after  = { start: formatCalendarDate(newStart),    end: formatCalendarDate(newEnd) };
 			toUpdate.push({ path: s.entryPath, startKey: s.startPropKey, endKey: s.endPropKey, before, after });
 			try {
 				await this.app.fileManager.processFrontMatter(primaryFile, fm => {
@@ -3574,11 +3172,11 @@ export class TimelineView extends BasesView {
 				const oldS = this.parseRawFrontmatterDate(oldStartStr);
 				const oldE = this.parseRawFrontmatterDate(oldEndStr);
 				if (!oldS || !oldE) continue;
-				const newS = this._addCalendarDays(oldS, deltaDays);
-				const newE = this._addCalendarDays(oldE, deltaDays);
+				const newS = addCalendarDays(oldS, deltaDays);
+				const newE = addCalendarDays(oldE, deltaDays);
 
-				const before = { start: this._fmtDate(oldS), end: this._fmtDate(oldE) };
-				const after  = { start: this._fmtDate(newS), end: this._fmtDate(newE) };
+				const before = { start: formatCalendarDate(oldS), end: formatCalendarDate(oldE) };
+				const after  = { start: formatCalendarDate(newS), end: formatCalendarDate(newE) };
 				toUpdate.push({ path, startKey: s.startPropKey, endKey: s.endPropKey, before, after });
 
 				await this.app.fileManager.processFrontMatter(file, fm => {
@@ -3661,129 +3259,6 @@ export class TimelineView extends BasesView {
 		}
 
 		return null;
-	}
-
-	private getTimelineRange(entries: BasesEntry[], startProp: BasesPropertyId, endProp: BasesPropertyId, config: TimelineConfig): { min: Date; max: Date } | null {
-		let min: Date | null = null;
-		let max: Date | null = null;
-
-		for (const entry of entries) {
-			const dates = this.getEntryDates(entry, startProp, endProp);
-			if (!dates) continue;
-			if (!min || dates.start < min) min = dates.start;
-			if (!max || dates.end > max) max = dates.end;
-		}
-
-		if (!min || !max) return null;
-
-		min = this.snapStartToScale(min, config.timeScale, config.weekStart);
-		max = this.snapEndToScale(max, config.timeScale, config.weekStart);
-
-		// Padding so bars/labels don't sit flush at edges
-		const weekMs = 7 * 24 * 60 * 60 * 1000;
-		if (config.timeScale === 'week') {
-			// One week before and after for week scale
-			min = new Date(min.getTime() - weekMs);
-			max = new Date(max.getTime() + weekMs);
-		} else if (config.timeScale !== 'day') {
-			max = new Date(max.getTime() + weekMs);
-		}
-
-		return { min, max };
-	}
-
-	private getScaleZoomFactor(scale: string): number {
-		if (scale === 'day') return 2.4;
-		if (scale === 'week') return 3.1;
-		if (scale === 'month') return 1.15;
-		if (scale === 'quarter') return 1;
-		if (scale === 'year') return 0.9;
-		return 1;
-	}
-
-	private snapStartToScale(date: Date, scale: string, weekStart: 'monday' | 'sunday' = 'monday'): Date {
-		const d = new Date(date);
-		d.setHours(0, 0, 0, 0);
-		if (scale === 'week') {
-			const day = d.getDay();
-			const shift = weekStart === 'sunday' ? day : (day === 0 ? 6 : day - 1);
-			d.setDate(d.getDate() - shift);
-		} else if (scale === 'month') {
-			d.setDate(1);
-		} else if (scale === 'quarter') {
-			const qStart = Math.floor(d.getMonth() / 3) * 3;
-			d.setMonth(qStart, 1);
-		} else if (scale === 'year') {
-			d.setMonth(0, 1);
-		}
-		return d;
-	}
-
-	private snapEndToScale(date: Date, scale: string, weekStart: 'monday' | 'sunday' = 'monday'): Date {
-		const d = new Date(date);
-		d.setHours(23, 59, 59, 999);
-		if (scale === 'week') {
-			const day = d.getDay();
-			const endShift = weekStart === 'sunday' ? (6 - day) : ((day === 0 ? 0 : 7 - day));
-			d.setDate(d.getDate() + endShift);
-		} else if (scale === 'month') {
-			d.setMonth(d.getMonth() + 1, 0);
-		} else if (scale === 'quarter') {
-			const qStart = Math.floor(d.getMonth() / 3) * 3;
-			d.setMonth(qStart + 3, 0);
-		} else if (scale === 'year') {
-			d.setMonth(11, 31);
-		}
-		return d;
-	}
-
-	private formatTickLabel(date: Date, scale: string, formatter: Intl.DateTimeFormat): string {
-		if (scale === 'week') {
-			const w = this.getIsoWeekNumber(date);
-			return `W${w}`;
-		}
-		if (scale === 'quarter') {
-			const quarter = Math.floor(date.getMonth() / 3) + 1;
-			return `Q${quarter}`;
-		}
-		return formatter.format(date);
-	}
-
-	private getIsoWeekNumber(date: Date): number {
-		const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-		d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
-		const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-		return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-	}
-
-	private getAxisFormatter(min: Date, max: Date, scale?: string): Intl.DateTimeFormat {
-		if (scale === 'day') {
-			return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
-		}
-		if (scale === 'week') {
-			return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
-		}
-		if (scale === 'month') {
-			return new Intl.DateTimeFormat(undefined, { month: 'short' });
-		}
-		if (scale === 'quarter') {
-			return new Intl.DateTimeFormat(undefined, { year: 'numeric' });
-		}
-		if (scale === 'year') {
-			return new Intl.DateTimeFormat(undefined, { year: 'numeric' });
-		}
-
-		const totalDays = Math.max(1, Math.round((max.getTime() - min.getTime()) / (1000 * 60 * 60 * 24)));
-		if (totalDays > 365 * 2) {
-			return new Intl.DateTimeFormat(undefined, { year: 'numeric' });
-		}
-		if (totalDays > 90) {
-			return new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric' });
-		}
-		if (totalDays > 14) {
-			return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
-		}
-		return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
 	}
 
 	private getUniqueStyleValues(styleProp: BasesPropertyId): string[] {

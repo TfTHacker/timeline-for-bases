@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.11
+
+### Improvements
+- **Refactored timeline internals** — extracted axis, canvas sizing, and base YAML persistence helpers with stricter TypeScript checks and expanded tests
+
+### Bug Fixes
+- **Correct `.base` persistence target** — custom timeline settings now save to the active Bases view instead of the wrong leaf when multiple Bases views are open
+- **Safer grouped interactions** — grouped drag/drop now respects writable properties and collapse state recovery uses stable persisted keys
+- **Accurate fixed windows** — fixed preset date windows no longer render an extra day
+- **Property cache invalidation** — frontmatter-derived value caches now refresh reliably on metadata changes
+
 ## 0.1.10
 
 ### New Features

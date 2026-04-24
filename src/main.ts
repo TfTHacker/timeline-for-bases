@@ -24,8 +24,10 @@ export default class TimelinePlugin extends Plugin {
 
 		this.addSettingTab(new TimelineSettingTab(this.app, this));
 		const clearValueCache = () => this.propertyValueCache.clear();
-		this.registerEvent(this.app.vault.on('create', clearValueCache));
-		this.registerEvent(this.app.vault.on('modify', clearValueCache));
+		// metadataCache.changed fires only when frontmatter/headings/links change —
+		// body-only edits don't invalidate the property-value cache. Delete/rename
+		// still come through vault events since metadata changes don't cover those.
+		this.registerEvent(this.app.metadataCache.on('changed', clearValueCache));
 		this.registerEvent(this.app.vault.on('delete', clearValueCache));
 		this.registerEvent(this.app.vault.on('rename', clearValueCache));
 	}
@@ -188,7 +190,8 @@ class TimelineSettingTab extends PluginSettingTab {
 				.addOption('monday', 'Monday')
 				.addOption('sunday', 'Sunday')
 				.setValue(this.plugin.settings.defaultWeekStart)
-				.onChange(async (value: 'monday' | 'sunday') => {
+				.onChange(async (value: string) => {
+					if (value !== 'monday' && value !== 'sunday') return;
 					this.plugin.settings.defaultWeekStart = value;
 					await this.plugin.saveSettings();
 				}));
